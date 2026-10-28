@@ -198,5 +198,113 @@ test('gameEngine handles anomaly manifestation, 0.7s Flag catch, false flags, an
   gameEngine.returnToMenu();
 });
 
+test('gameEngine handles Stop 4 forgiving false stop, Stop 6 Safe Haven + recorder handoff, and Stop 6b/9 False Stop Trial room', () => {
+  gameEngine.startRide({ chapter: 1, nightmare: false });
+
+  // Jump to Stop 4 (tableIndex = 2, forgivingFalseStop: true)
+  gameEngine.enterSegment(2);
+  gameEngine.arriveAtCurrentStop();
+  assert.equal(gameEngine.getSnapshot().segmentId, '4');
+  assert.equal(gameEngine.getSnapshot().activeDoorTell, 'doors_open_early');
+
+  // Stepping off at Stop 4 does NOT trigger Trial; Mom grabs your sleeve
+  gameEngine.stepOffTrain();
+  assert.equal(gameEngine.getSnapshot().phase, 'ride');
+  assert.equal(gameEngine.getSnapshot().segmentId, '5');
+  assert.equal(gameEngine.getSnapshot().falseStopTrials.length, 0);
+  assert.equal(
+    gameEngine.getSnapshot().subtitle?.text,
+    'Not this one, hon. The doors opened funny.'
+  );
+
+  // Jump to Stop 6 (tableIndex = 4, stopType = 'haven')
+  gameEngine.enterSegment(4);
+  gameEngine.update({ sanity: 60 });
+  gameEngine.arriveAtCurrentStop();
+  assert.equal(gameEngine.getSnapshot().segmentId, '6');
+
+  // Step off at Stop 6 Safe Haven -> phase 'haven', +15 sanity, hasRecorder = true
+  gameEngine.stepOffTrain();
+  assert.equal(gameEngine.getSnapshot().phase, 'haven');
+  assert.equal(gameEngine.getSnapshot().hasRecorder, true);
+  assert.equal(gameEngine.getSnapshot().safeHavenVisited, true);
+  assert.equal(gameEngine.getSnapshot().sanity, 75);
+
+  // Complete Safe Haven -> enters Stop 6b (tableIndex = 5, silent flicker false stop)
+  gameEngine.completeSafeHaven();
+  assert.equal(gameEngine.getSnapshot().phase, 'ride');
+  assert.equal(gameEngine.getSnapshot().segmentId, '6b');
+  assert.equal(gameEngine.getSnapshot().activeDoorTell, 'lights_flicker');
+
+  // Arrive at Stop 6b and step off -> enters False Stop Trial room (stage 1, depth 1)
+  gameEngine.arriveAtCurrentStop();
+  assert.equal(
+    gameEngine.getSnapshot().subtitle?.text,
+    'I think this is our… let’s… stretch our legs.'
+  );
+  gameEngine.stepOffTrain();
+  assert.equal(gameEngine.getSnapshot().phase, 'trial');
+  assert.equal(gameEngine.getSnapshot().trialState?.stage, 1);
+  assert.equal(gameEngine.getSnapshot().trialState?.depth, 1);
+
+  // Stage 1: 'terminus_sign' is a lie -> loops (depth = 2)
+  gameEngine.chooseTrialOption('terminus_sign');
+  assert.equal(gameEngine.getSnapshot().trialState?.stage, 1);
+  assert.equal(gameEngine.getSnapshot().trialState?.depth, 2);
+
+  // Stage 1: 'opposite_sign' advances to Stage 2
+  gameEngine.chooseTrialOption('opposite_sign');
+  assert.equal(gameEngine.getSnapshot().trialState?.stage, 2);
+
+  // Stage 2: 'middle_stairs' (steady light) advances to Stage 3
+  gameEngine.chooseTrialOption('middle_stairs');
+  assert.equal(gameEngine.getSnapshot().trialState?.stage, 3);
+
+  // Stage 3: 'right_train' (steady light) escapes Trial room back to ride (Stop 7)
+  gameEngine.chooseTrialOption('right_train');
+  assert.equal(gameEngine.getSnapshot().phase, 'ride');
+  assert.equal(gameEngine.getSnapshot().segmentId, '7');
+  assert.equal(gameEngine.getSnapshot().falseStopTrials.length, 1);
+  assert.equal(gameEngine.getSnapshot().falseStopTrials[0]?.stop, 6);
+  assert.equal(gameEngine.getSnapshot().falseStopTrials[0]?.depth, 2);
+
+  gameEngine.returnToMenu();
+});
+
+test('gameEngine handles Stop 11 Restraint (hold steady vs fail), Newtown Creek trestle, and Stop 12 bait', () => {
+  gameEngine.startRide({ chapter: 1, nightmare: false });
+
+  // Enter Segment 11 (tableIndex = 10, Stop 11 Greenpoint Av)
+  gameEngine.enterSegment(10);
+  assert.equal(gameEngine.getSnapshot().segmentId, '11');
+
+  // Trigger Restraint and hold Space for 4.0s -> restraintHeld = true, ceiling bonus = +6 (ceiling 15)
+  gameEngine.triggerRestraintMoment();
+  assert.equal(gameEngine.getSnapshot().activeRestraint?.active, true);
+  gameEngine.setRestraintHolding(true);
+  gameEngine.stepRide(4.1);
+  assert.equal(gameEngine.getSnapshot().activeRestraint, null);
+  assert.equal(gameEngine.getSnapshot().restraintHeld, true);
+  assert.equal(gameEngine.getSnapshot().restraintCeilingBonus, 6);
+  assert.ok(gameEngine.getSnapshot().sanity <= 15 && gameEngine.getSnapshot().sanity > 9);
+
+  // Arrive at Stop 11 and stay on -> enters Segment 12 (Newtown Creek trestle on G train)
+  gameEngine.arriveAtCurrentStop();
+  gameEngine.stayOnTrain();
+  assert.equal(gameEngine.getSnapshot().segmentId, '12');
+  assert.equal(gameEngine.getSnapshot().isOnTrestle, true);
+  assert.equal(gameEngine.getSnapshot().trestleWitnessed, true);
+
+  // Arrive at Stop 12 (21 St bait) and step off -> ends ride with The Eternal Commute
+  gameEngine.arriveAtCurrentStop();
+  assert.equal(gameEngine.getSnapshot().currentStationName, '21 St');
+  gameEngine.stepOffTrain();
+  assert.equal(gameEngine.getSnapshot().phase, 'end');
+  assert.equal(gameEngine.getSnapshot().steppedOffAtBait, true);
+
+  gameEngine.returnToMenu();
+});
+
+
 
 

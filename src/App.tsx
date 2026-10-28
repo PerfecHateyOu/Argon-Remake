@@ -7,6 +7,7 @@ import { StartScreen } from './components/StartScreen';
 import { ROUTE_METADATA } from './constants';
 import { gameEngine } from './game/gameState';
 import { PSYCH_IDS, resolvePsychLogCatalog } from './game/psychLog';
+import { formatRouteText } from './game/routeText';
 import { SceneRenderer } from './graphics/sceneRenderer';
 import { playerController } from './input/keyLook';
 import { pointerLock, type PointerLockState } from './input/pointerLock';
@@ -60,7 +61,7 @@ export default function App() {
     };
   }, []);
 
-  // Global keyboard shortcuts (P/Esc pause, M mute, L route selector, E step off at stop, F flag hold, 1/2/3 mask check, ` debug overlay)
+  // Global keyboard shortcuts (P/Esc pause, M mute, L route selector, E step off at stop, F flag hold, Space restraint hold, 1/2/3 mask check/trial/exit, ` debug overlay)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (settingsOpen || caseFilesOpen || routeSelectorOpen) {
@@ -78,21 +79,52 @@ export default function App() {
       }
 
       if (
+        (e.code === 'Space' || e.key === ' ') &&
+        snapshot.activeRestraint?.active &&
+        !snapshot.paused
+      ) {
+        e.preventDefault();
+        gameEngine.setRestraintHolding(true);
+        return;
+      }
+
+      if (
         (e.key === 'f' || e.key === 'F' || e.code === 'KeyF') &&
         snapshot.phase === 'ride' &&
         !snapshot.paused
       ) {
         e.preventDefault();
+        if (snapshot.activeRestraint?.active) {
+          gameEngine.showSubtitle({ text: 'Not now. Keep holding.' }, 2.0);
+          return;
+        }
+        if (snapshot.activeMaskCheck) {
+          gameEngine.showSubtitle({ text: 'Answer first.' }, 2.0);
+          return;
+        }
         gameEngine.setFlagHolding(true);
         return;
       }
 
-      // 1 / 2 / 3 keys for Mask Check responses (or final stop Court Sq choice)
+      // 1 / 2 / 3 keys for Mask Check responses, False Stop Trial choices, or final stop Court Sq choice
       if (!snapshot.paused && (e.key === '1' || e.key === '2' || e.key === '3')) {
         const idx = (Number(e.key) - 1) as 0 | 1 | 2;
         if (snapshot.activeMaskCheck) {
           e.preventDefault();
           gameEngine.answerMaskCheck(idx);
+          return;
+        }
+        if (snapshot.phase === 'trial' && snapshot.trialState) {
+          e.preventDefault();
+          const st = snapshot.trialState.stage;
+          if (st === 1 && idx <= 1) {
+            gameEngine.chooseTrialOption(idx === 0 ? 'terminus_sign' : 'opposite_sign');
+          } else if (st === 2) {
+            const stairChoices = ['left_stairs', 'middle_stairs', 'right_stairs'] as const;
+            gameEngine.chooseTrialOption(stairChoices[idx]);
+          } else if (st === 3 && idx <= 1) {
+            gameEngine.chooseTrialOption(idx === 0 ? 'left_train' : 'right_train');
+          }
           return;
         }
         const seg = gameEngine.getCurrentSegmentRule();
@@ -136,10 +168,14 @@ export default function App() {
       if (e.key === 'f' || e.key === 'F' || e.code === 'KeyF') {
         gameEngine.setFlagHolding(false);
       }
+      if (e.code === 'Space' || e.key === ' ') {
+        gameEngine.setRestraintHolding(false);
+      }
     };
 
     const handleBlur = () => {
       gameEngine.setFlagHolding(false);
+      gameEngine.setRestraintHolding(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -157,12 +193,16 @@ export default function App() {
     snapshot.phase,
     snapshot.paused,
     snapshot.activeMaskCheck,
+    snapshot.activeRestraint,
+    snapshot.trialState,
   ]);
 
   const handleCanvasClick = () => {
     if (
       snapshot.phase === 'menu' ||
       snapshot.phase === 'end' ||
+      snapshot.phase === 'trial' ||
+      snapshot.phase === 'haven' ||
       snapshot.paused ||
       settingsOpen ||
       caseFilesOpen ||
@@ -251,10 +291,20 @@ export default function App() {
                     {currentRoute.id}
                   </span>
                   <span>
-                    {snapshot.phase === 'stop'
+                    {snapshot.phase === 'stop' || snapshot.phase === 'haven'
                       ? `At station: ${snapshot.currentStationName}`
-                      : `Next approaching station: ${snapshot.nextStationName}`}
+                      : snapshot.phase === 'trial'
+                        ? `False Stop Trial · Loop ${snapshot.trialState?.depth ?? 1}`
+                        : `Next approaching station: ${snapshot.nextStationName}`}
                   </span>
+                  {snapshot.isOnTrestle && (
+                    <span
+                      data-testid="trestle-badge"
+                      className="text-[10px] font-mono text-[#9ec4e8]"
+                    >
+                      · NEWTOWN CREEK TRESTLE
+                    </span>
+                  )}
                   {snapshot.nightmareMode && (
                     <span className="text-[10px] font-mono text-[#ffcf8a]">· NIGHTMARE MODE</span>
                   )}
@@ -279,6 +329,14 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 pointer-events-auto">
+              {snapshot.hasRecorder && (
+                <div
+                  data-testid="recorder-hud-badge"
+                  className="px-3 py-1.5 border border-[#ffcf8a]/40 bg-[#080a08]/90 text-xs font-mono text-[#ffcf8a] whitespace-nowrap"
+                >
+                  Tape recorder (R)
+                </div>
+              )}
               <button
                 type="button"
                 tabIndex={-1}
@@ -357,11 +415,171 @@ export default function App() {
             )}
           </div>
 
-          {/* Bottom Controls: WALK Stick, Mask Check Prompt, Station Stop Decision, Subtitles, Debug Overlay, Hint Strip, and FLAG Button */}
+          {/* Bottom Controls: WALK Stick, Restraint Prompt, Trial Room, Safe Haven, Mask Check, Station Stop, Subtitles, Debug Overlay, Hint Strip, and FLAG Button */}
           <div className="flex items-end justify-between gap-4">
             <MoveStick onMove={(x, y) => playerController.setMoveStickInput(x, y)} />
 
             <div className="flex flex-col items-center gap-2.5 mx-auto max-w-2xl w-full">
+              {/* Stop 11 Greenpoint Av Restraint Moment */}
+              {snapshot.activeRestraint?.active && !snapshot.paused && (
+                <div
+                  data-testid="restraint-panel"
+                  className="border border-[#ffcf8a]/60 bg-[#080a08]/95 px-5 py-4 max-w-md w-full space-y-3 pointer-events-auto"
+                >
+                  <div className="flex items-center justify-between gap-4 text-[11px] font-mono uppercase tracking-wider text-[#ffcf8a]">
+                    <span>Restraint · Stop 11 (Greenpoint Av)</span>
+                    <span>
+                      {snapshot.activeRestraint.isHolding
+                        ? `Holding ${Math.round(snapshot.activeRestraint.holdProgress * 100)}%`
+                        : `Grace ${snapshot.activeRestraint.graceRemainingSec.toFixed(1)}s`}
+                    </span>
+                  </div>
+                  <div className="text-sm font-semibold text-[#fff0d4]">
+                    {snapshot.activeRestraint.reholdWarning
+                      ? 'Hold Space again. Don’t react.'
+                      : 'Hold Space. Don’t let go. Don’t react.'}
+                  </div>
+                  <div className="w-full h-1.5 bg-[#e6e2d8]/15 overflow-hidden">
+                    <div
+                      className="h-full bg-[#ffcf8a] transition-all duration-75"
+                      style={{
+                        width: `${Math.round(snapshot.activeRestraint.holdProgress * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="restraint-hold-button"
+                    onPointerDown={() => gameEngine.setRestraintHolding(true)}
+                    onPointerUp={() => gameEngine.setRestraintHolding(false)}
+                    onPointerLeave={() => gameEngine.setRestraintHolding(false)}
+                    onPointerCancel={() => gameEngine.setRestraintHolding(false)}
+                    className="w-full py-2 px-4 bg-[#fff0d4] text-[#040504] text-xs font-semibold uppercase tracking-wider hover:bg-[#ffcf8a] cursor-pointer select-none"
+                  >
+                    Hold steady (Space)
+                  </button>
+                </div>
+              )}
+
+              {/* Stop 6 Safe Haven Panel */}
+              {snapshot.phase === 'haven' && !snapshot.paused && (
+                <div
+                  data-testid="safe-haven-panel"
+                  className="border border-[#ffcf8a]/50 bg-[#080a08]/95 px-5 py-4 max-w-md w-full space-y-3 pointer-events-auto"
+                >
+                  <div className="flex items-center justify-between gap-4 text-[11px] font-mono uppercase tracking-wider text-[#ffcf8a]">
+                    <span>Safe Haven · {snapshot.currentStationName}</span>
+                    <span>+15 Sanity Restored</span>
+                  </div>
+                  <div className="text-xs text-[#e6e2d8] leading-relaxed">
+                    Dad hands you your grandfather’s microcassette recorder on the platform.{' '}
+                    <span className="text-[#ffcf8a] font-mono">
+                      Dad gave you a tape recorder. Press R to raise it.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="haven-board-button"
+                    onClick={() => gameEngine.completeSafeHaven()}
+                    className="w-full py-2 px-4 bg-[#fff0d4] text-[#040504] text-xs font-semibold hover:bg-[#ffcf8a] cursor-pointer"
+                  >
+                    Get back on with them
+                  </button>
+                </div>
+              )}
+
+              {/* False Stop Trial Room Panel (3-stage puzzle) */}
+              {snapshot.phase === 'trial' && snapshot.trialState && !snapshot.paused && (
+                <div
+                  data-testid="trial-room-panel"
+                  className="border border-[#ffcf8a]/55 bg-[#080a08]/95 px-5 py-4 max-w-md w-full space-y-3 pointer-events-auto"
+                >
+                  <div className="flex items-center justify-between gap-4 text-[11px] font-mono uppercase tracking-wider text-[#ffcf8a]">
+                    <span>False Stop Trial · Stage {snapshot.trialState.stage}/3</span>
+                    <span>{snapshot.trialState.depth} loops deep</span>
+                  </div>
+                  <div className="text-xs text-[#c8c3b8]">
+                    Find the way back. The signs lie. Watch the lights when the chime plays.
+                  </div>
+                  {snapshot.trialState.feedbackText && (
+                    <div className="text-xs italic text-[#fff0d4]">
+                      {snapshot.trialState.feedbackText}
+                    </div>
+                  )}
+
+                  {snapshot.trialState.stage === 1 && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        data-testid="trial-sign-terminus"
+                        onClick={() => gameEngine.chooseTrialOption('terminus_sign')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        1. {formatRouteText('To {terminusSign} trains', snapshot.activeRoute)}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="trial-sign-opposite"
+                        onClick={() => gameEngine.chooseTrialOption('opposite_sign')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        2. {formatRouteText('To {opposite} trains', snapshot.activeRoute)}
+                      </button>
+                    </div>
+                  )}
+
+                  {snapshot.trialState.stage === 2 && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        data-testid="trial-stairs-left"
+                        onClick={() => gameEngine.chooseTrialOption('left_stairs')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        1. Left stairs
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="trial-stairs-middle"
+                        onClick={() => gameEngine.chooseTrialOption('middle_stairs')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        2. Middle stairs
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="trial-stairs-right"
+                        onClick={() => gameEngine.chooseTrialOption('right_stairs')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        3. Right stairs
+                      </button>
+                    </div>
+                  )}
+
+                  {snapshot.trialState.stage === 3 && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        data-testid="trial-train-left"
+                        onClick={() => gameEngine.chooseTrialOption('left_train')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        1. Board the left train
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="trial-train-right"
+                        onClick={() => gameEngine.chooseTrialOption('right_train')}
+                        className="w-full py-2 px-3 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#e6e2d8] hover:border-[#fff0d4] text-left cursor-pointer"
+                      >
+                        2. Board the right train
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Parent Mask Check Prompt (1 / 2 / 3) */}
               {snapshot.activeMaskCheck && !snapshot.paused && (
                 <div
@@ -552,7 +770,7 @@ export default function App() {
         </div>
       )}
 
-      {/* End of Ride Summary Overlay (Milestone 3 arrival; expanded to full ReportScreen in Milestone 8) */}
+      {/* End of Ride Summary Overlay (Milestone 3/6 arrival; expanded to full ReportScreen in Milestone 8) */}
       {snapshot.phase === 'end' && (
         <div
           role="dialog"
@@ -563,10 +781,14 @@ export default function App() {
         >
           <div className="w-full max-w-lg border border-[#e6e2d8]/25 bg-[#0b0d0b] p-6 space-y-4">
             <div className="text-xs font-mono uppercase tracking-widest text-[#ffcf8a]">
-              [TERMINUS REACHED · {snapshot.currentStationName.toUpperCase()}]
+              {snapshot.steppedOffAtBait
+                ? '[LOOP: THE ETERNAL COMMUTE]'
+                : `[TERMINUS REACHED · ${snapshot.currentStationName.toUpperCase()}]`}
             </div>
             <h2 className="text-xl font-bold text-[#fff0d4]">
-              Here we are. {snapshot.currentStationName}.
+              {snapshot.steppedOffAtBait
+                ? 'The Eternal Commute'
+                : `Here we are. ${snapshot.currentStationName}.`}
             </h2>
             {snapshot.subtitle && (
               <p className="text-sm italic text-[#c8c3b8]">{snapshot.subtitle.text}</p>
@@ -581,6 +803,22 @@ export default function App() {
                 Anomalies Caught: {snapshot.anomaliesCaughtCount} of{' '}
                 {snapshot.anomaliesSpawnedCount}
               </div>
+              <div>
+                Restraint (Stop 11):{' '}
+                {snapshot.restraintHeld
+                  ? `Held (+${snapshot.restraintCeilingBonus} ceiling bonus)`
+                  : snapshot.restraintCompleted
+                    ? 'Failed'
+                    : 'Not reached'}
+              </div>
+              <div>
+                False Stop Trials:{' '}
+                {snapshot.falseStopTrials.length === 0
+                  ? 'None. You never stepped off into a trap.'
+                  : snapshot.falseStopTrials
+                      .map((t) => `Stop ${t.stop} (${t.depth} loops deep)`)
+                      .join(', ')}
+              </div>
             </div>
             <div className="flex items-center gap-3 pt-2">
               <button
@@ -589,7 +827,7 @@ export default function App() {
                 onClick={() => gameEngine.startRide()}
                 className="flex-1 py-2.5 bg-[#fff0d4] text-[#040504] text-sm font-semibold hover:bg-[#ffcf8a] cursor-pointer"
               >
-                Ride again
+                {snapshot.steppedOffAtBait ? 'Get back on' : 'Ride again'}
               </button>
               <button
                 type="button"

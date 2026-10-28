@@ -178,6 +178,40 @@ export interface SegmentRule {
   exitChoice?: boolean;
 }
 
+export interface TrialState {
+  stage: 1 | 2 | 3;
+  stopNumber: number;
+  depth: number;
+  steadyStairIndex: 0 | 1 | 2;
+  steadyTrainSide: 'left' | 'right';
+  feedbackText: string | null;
+}
+
+export interface FalseStopTrialRecord {
+  stop: number;
+  depth: number;
+}
+
+export interface ActiveRestraintState {
+  active: boolean;
+  isHolding: boolean;
+  graceRemainingSec: number;
+  holdProgress: number;
+  reholdWarning: boolean;
+}
+
+export interface StopDecisionRecord {
+  segmentId: string;
+  stopNumber: number;
+  stationName: string;
+  stopType: StopType;
+  doorTell: DoorTellType;
+  steppedOff: boolean;
+  sanityAfter: number;
+  sanityBandMin: number;
+  sanityBandMax: number;
+}
+
 export interface EngineSnapshot {
   phase: GamePhase;
   rideSubPhase: RideSubPhase;
@@ -192,6 +226,9 @@ export interface EngineSnapshot {
   currentStationName: string;
   nextStationName: string;
   isOpenAirStation: boolean;
+  isOnTrestle: boolean;
+  trestleProgress: number;
+  trestleWitnessed: boolean;
   trainSpeedMps: number;
   segmentElapsedSec: number;
   segmentDurationSec: number;
@@ -215,6 +252,16 @@ export interface EngineSnapshot {
   anomaliesSpawnedCount: number;
   anomaliesCaughtCount: number;
   falseFlagsCount: number;
+  hasRecorder: boolean;
+  safeHavenVisited: boolean;
+  trialState: TrialState | null;
+  falseStopTrials: FalseStopTrialRecord[];
+  activeRestraint: ActiveRestraintState | null;
+  restraintHeld: boolean;
+  restraintCompleted: boolean;
+  restraintCeilingBonus: number;
+  steppedOffAtBait: boolean;
+  stopDecisions: StopDecisionRecord[];
   sanity: number;
   sanityTier: SanityTier;
   suspicion: number;
@@ -230,6 +277,7 @@ export interface EngineSnapshot {
   playerYaw: number;
   playerPitch: number;
 }
+
 
 
 

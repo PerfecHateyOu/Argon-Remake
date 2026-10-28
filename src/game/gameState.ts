@@ -13,6 +13,8 @@ import {
   PA_NEXT_STOP_ANNOUNCE_SEC,
   PLAYER_SEAT_X,
   PLAYER_SEAT_Z,
+  RESTRAINT_CEILING_RAISE,
+  RESTRAINT_GRACE_SECONDS,
   ROLLSIGN_DISPLAY_SEC,
   SANITY_BANDS_BY_STOP,
   SANITY_DELTAS,
@@ -29,11 +31,13 @@ import { pointerLock } from '../input/pointerLock';
 import { settingsStore } from '../settings';
 import type {
   ActiveAnomalyInstance,
+  ActiveRestraintState,
   AnomalyId,
   ChapterStartOption,
   DoorTellType,
   EngineSnapshot,
   ExitChoiceId,
+  FalseStopTrialRecord,
   GamePhase,
   RideAnomalyRecord,
   RideSubPhase,
@@ -41,7 +45,9 @@ import type {
   RouteLineId,
   SanityTier,
   SegmentRule,
+  StopDecisionRecord,
   SubtitleItem,
+  TrialState,
 } from '../types';
 import {
   buildActiveAnomalyInstance,
@@ -73,6 +79,17 @@ import {
 } from './routeText';
 
 type EngineListener = (snapshot: EngineSnapshot) => void;
+
+export type TrialChoiceId =
+  | 'terminus_sign'
+  | 'opposite_sign'
+  | 'left_stairs'
+  | 'middle_stairs'
+  | 'right_stairs'
+  | 'left_train'
+  | 'right_train';
+
+export const RESTRAINT_HOLD_DURATION_SEC = 4.0;
 
 export function computeSanityTier(sanity: number): SanityTier {
   if (sanity >= SANITY_TIER_THRESHOLDS.HIGH) return 'High';
@@ -158,6 +175,7 @@ class GameEngine {
   private frameSampleCount = 0;
 
   private stopElapsedSec = 0;
+  private havenElapsedSec = 0;
   private subtitleRemainingSec = 0;
   private rollsignRemainingSec = 0;
   private paranoidFlashRemainingSec = 0;
@@ -168,6 +186,7 @@ class GameEngine {
   private clockSanityTickApplied = false;
   private chatPart1Played = false;
   private chatPart2Played = false;
+  private restraintTriggeredInSegment = false;
   private maskChecksTriggeredInSegment = 0;
   private usedMaskCheckIds = new Set<string>();
   private usedAnomalyIds = new Set<AnomalyId>();
@@ -199,6 +218,9 @@ class GameEngine {
       currentStationName: getStopName('G', 0),
       nextStationName: getStopName('G', 1),
       isOpenAirStation: false,
+      isOnTrestle: false,
+      trestleProgress: 0,
+      trestleWitnessed: false,
       trainSpeedMps: 0,
       segmentElapsedSec: 0,
       segmentDurationSec: DEFAULT_CRUISE_DURATION_SEC,
@@ -222,6 +244,16 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      hasRecorder: false,
+      safeHavenVisited: false,
+      trialState: null,
+      falseStopTrials: [],
+      activeRestraint: null,
+      restraintHeld: false,
+      restraintCompleted: false,
+      restraintCeilingBonus: 0,
+      steppedOffAtBait: false,
+      stopDecisions: [],
       sanity: 100,
       sanityTier: 'High',
       suspicion: 0,
@@ -342,10 +374,12 @@ class GameEngine {
       SEGMENT_TABLE[patch.segmentTableIndex ?? this.snapshot.segmentTableIndex] ??
       SEGMENT_TABLE[0]!;
     const stopNum = segRule.stopNumber;
+    const restraintBonus =
+      patch.restraintCeilingBonus ?? this.snapshot.restraintCeilingBonus;
 
     const nextSanity =
       typeof patch.sanity === 'number'
-        ? clampSanityForStop(patch.sanity, stopNum)
+        ? clampSanityForStop(patch.sanity, stopNum, restraintBonus)
         : this.snapshot.sanity;
 
     const rawSuspicion =
@@ -362,7 +396,7 @@ class GameEngine {
     const intervention = evaluateSuspicionIntervention(rawSuspicion);
     const finalSuspicion = intervention.nextSuspicion;
     const finalSanity = intervention.intervened
-      ? clampSanityForStop(nextSanity + intervention.sanityDelta, stopNum)
+      ? clampSanityForStop(nextSanity + intervention.sanityDelta, stopNum, restraintBonus)
       : nextSanity;
     const finalInterventionsCount =
       (patch.interventionsCount ?? this.snapshot.interventionsCount) +
@@ -708,6 +742,299 @@ class GameEngine {
     });
   }
 
+  /**
+   * Starts the Stop 11 Greenpoint Av Restraint moment (2.5 s initial grace window, 4.0 s hold).
+   */
+  public triggerRestraintMoment(): void {
+    const isTouch =
+      typeof window !== 'undefined' &&
+      ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    const promptText = isTouch
+      ? 'Hold the button. Don’t let go. Don’t react.'
+      : 'Hold Space. Don’t let go. Don’t react.';
+
+    const restraintState: ActiveRestraintState = {
+      active: true,
+      isHolding: false,
+      graceRemainingSec: RESTRAINT_GRACE_SECONDS,
+      holdProgress: 0,
+      reholdWarning: false,
+    };
+
+    this.restraintTriggeredInSegment = true;
+    this.update({
+      activeRestraint: restraintState,
+      activeMaskCheck: null,
+      watchingParentLabel: 'Mom',
+      lightFlickerIntensity: 0.08,
+    });
+    this.showSubtitle(
+      {
+        speaker: 'Mom',
+        stageDirection: '(her mouth doesn’t move)',
+        text: promptText,
+      },
+      6.5
+    );
+  }
+
+  /**
+   * Sets whether the player is holding Space / the Hold steady button during Stop 11 Restraint.
+   */
+  public setRestraintHolding(holding: boolean): void {
+    const cur = this.snapshot.activeRestraint;
+    if (!cur || !cur.active || cur.isHolding === holding) return;
+
+    const isTouch =
+      typeof window !== 'undefined' &&
+      ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    const reholdWarning = !holding && cur.holdProgress > 0;
+
+    this.update({
+      activeRestraint: {
+        ...cur,
+        isHolding: holding,
+        reholdWarning,
+      },
+    });
+
+    if (reholdWarning) {
+      this.showSubtitle(
+        {
+          text: isTouch
+            ? 'Hold the button again. Don’t react.'
+            : 'Hold Space again. Don’t react.',
+        },
+        2.5
+      );
+    }
+  }
+
+  /**
+   * Completes the Stop 6 Safe Haven platform pause and returns to the train for segment 6b.
+   */
+  public completeSafeHaven(): void {
+    if (this.snapshot.phase !== 'haven') return;
+    const route = this.snapshot.activeRoute;
+    const nextIdx = Math.min(
+      SEGMENT_TABLE.length - 1,
+      this.snapshot.segmentTableIndex + 1
+    );
+    this.enterSegment(nextIdx);
+    this.showSubtitle(
+      {
+        speaker: 'Dad',
+        text: formatRouteText(
+          'Feels good to stand up, right? Couple more stops after this. Then {terminus}.',
+          route
+        ),
+        stageDirection: 'You get back on with them.',
+      },
+      4.5
+    );
+  }
+
+  /**
+   * Enters the False Stop Trial room at Stage 1 ("Find the way back. The signs lie. Watch the lights when the chime plays.").
+   */
+  public enterTrialRoom(stopNumber?: number): void {
+    const seg = this.getCurrentSegmentRule();
+    const trial: TrialState = {
+      stage: 1,
+      stopNumber: stopNumber ?? seg.stopNumber,
+      depth: 1,
+      steadyStairIndex: 1,
+      steadyTrainSide: 'right',
+      feedbackText:
+        'Find the way back. The signs lie. Watch the lights when the chime plays.',
+    };
+
+    pointerLock.unlock({ quiet: true });
+    playerController.resetToSeat();
+
+    this.update({
+      phase: 'trial',
+      trialState: trial,
+      trainSpeedMps: 0,
+      activeMaskCheck: null,
+      watchingParentLabel: null,
+      subtitle: {
+        id: `trial-start-${Date.now()}`,
+        text: trial.feedbackText ?? '',
+      },
+    });
+    this.subtitleRemainingSec = 6.0;
+  }
+
+  /**
+   * Resolves a player choice inside the 3-stage False Stop Trial room:
+   * - Stage 1 (Signs): 'opposite_sign' ("To {opposite} trains") is correct because the signs lie.
+   * - Stage 2 (Stairs): 'middle_stairs' (steadyStairIndex === 1) has steady light and leads to the platform edge.
+   * - Stage 3 (Trains): 'right_train' (steadyTrainSide === 'right') has steady light when the chime plays and returns you to the car.
+   */
+  public chooseTrialOption(choice: TrialChoiceId): void {
+    const trial = this.snapshot.trialState;
+    if (this.snapshot.phase !== 'trial' || !trial) return;
+
+    if (trial.stage === 1) {
+      if (choice === 'opposite_sign') {
+        const nextTrial: TrialState = {
+          ...trial,
+          stage: 2,
+          feedbackText: 'The stairs go down to another platform.',
+        };
+        this.update({ trialState: nextTrial });
+        this.showSubtitle(
+          {
+            stageDirection: 'The stairs go down to another platform.',
+            text: '',
+          },
+          3.8
+        );
+      } else {
+        const nextTrial: TrialState = {
+          ...trial,
+          stage: 1,
+          depth: trial.depth + 1,
+          feedbackText:
+            'The stairs bring you back up onto the same platform. It’s quieter now.',
+        };
+        this.update({ trialState: nextTrial });
+        this.showSubtitle(
+          {
+            stageDirection:
+              'The stairs bring you back up onto the same platform. It’s quieter now.',
+            text: '',
+          },
+          3.8
+        );
+      }
+      return;
+    }
+
+    if (trial.stage === 2) {
+      const stairIdx =
+        choice === 'left_stairs' ? 0 : choice === 'middle_stairs' ? 1 : 2;
+      if (stairIdx === trial.steadyStairIndex) {
+        const nextTrial: TrialState = {
+          ...trial,
+          stage: 3,
+          feedbackText: 'You come out at the platform edge. Two trains are coming.',
+        };
+        this.update({ trialState: nextTrial });
+        this.showSubtitle(
+          {
+            stageDirection:
+              'You come out at the platform edge. Two trains are coming.',
+            text: '',
+          },
+          4.0
+        );
+      } else {
+        const nextTrial: TrialState = {
+          ...trial,
+          stage: 1,
+          depth: trial.depth + 1,
+          feedbackText:
+            'The stairs bring you back up onto the same platform. It’s quieter now.',
+        };
+        this.update({ trialState: nextTrial });
+        this.showSubtitle(
+          {
+            stageDirection:
+              'The stairs bring you back up onto the same platform. It’s quieter now.',
+            text: '',
+          },
+          3.8
+        );
+      }
+      return;
+    }
+
+    if (trial.stage === 3) {
+      const chosenSide = choice === 'left_train' ? 'left' : 'right';
+      if (chosenSide === trial.steadyTrainSide) {
+        const record: FalseStopTrialRecord = {
+          stop: trial.stopNumber,
+          depth: trial.depth,
+        };
+        const nextTrials = [...this.snapshot.falseStopTrials, record];
+        const nextIdx = Math.min(
+          SEGMENT_TABLE.length - 1,
+          this.snapshot.segmentTableIndex + 1
+        );
+
+        this.update({
+          trialState: null,
+          falseStopTrials: nextTrials,
+          sanity: this.snapshot.sanity + SANITY_DELTAS.TRIAL,
+          lastReactionReason: 'Returned from a False Stop Trial',
+        });
+
+        this.enterSegment(nextIdx);
+
+        if (trial.depth > 1) {
+          this.showSubtitle(
+            {
+              stageDirection: 'You don’t remember getting back on.',
+              speaker: 'Mom',
+              text: 'Oh my god. Where were you? Sit. Stay where we can see you.',
+            },
+            4.6
+          );
+        } else {
+          this.showSubtitle(
+            {
+              speaker: 'Mom',
+              text: 'Where did you go?! You can’t just walk off like that!',
+            },
+            4.4
+          );
+        }
+      } else {
+        const nextTrial: TrialState = {
+          ...trial,
+          stage: 2,
+          depth: trial.depth + 1,
+          feedbackText: 'The doors close on nothing. You’re back on the stairs.',
+        };
+        this.update({ trialState: nextTrial });
+        this.showSubtitle(
+          {
+            stageDirection:
+              'The doors close on nothing. You’re back on the stairs.',
+            text: '',
+          },
+          3.8
+        );
+      }
+    }
+  }
+
+  private recordStopDecision(seg: SegmentRule, steppedOff: boolean): void {
+    const route = this.snapshot.activeRoute;
+    const stationName = getStopName(route, seg.stationIndex);
+    const band = SANITY_BANDS_BY_STOP[seg.stopNumber] ?? [0, 100];
+    const maxBand = Math.min(100, band[1] + this.snapshot.restraintCeilingBonus);
+
+    const record: StopDecisionRecord = {
+      segmentId: seg.id,
+      stopNumber: seg.stopNumber,
+      stationName,
+      stopType: seg.stopType,
+      doorTell: seg.doorTell,
+      steppedOff,
+      sanityAfter: this.snapshot.sanity,
+      sanityBandMin: band[0],
+      sanityBandMax: maxBand,
+    };
+
+    this.snapshot = {
+      ...this.snapshot,
+      stopDecisions: [...this.snapshot.stopDecisions, record],
+    };
+  }
+
   public startRide(options?: {
     chapter?: ChapterStartOption;
     nightmare?: boolean;
@@ -725,6 +1052,7 @@ class GameEngine {
     this.frameTimeAccumMs = 0;
     this.frameSampleCount = 0;
     this.stopElapsedSec = 0;
+    this.havenElapsedSec = 0;
     this.headWhipCooldownSec = 0;
     this.paranoidFlashRemainingSec = 0;
     this.nextStopPaAnnounced = false;
@@ -732,6 +1060,7 @@ class GameEngine {
     this.clockSanityTickApplied = false;
     this.chatPart1Played = false;
     this.chatPart2Played = false;
+    this.restraintTriggeredInSegment = false;
     this.maskChecksTriggeredInSegment = 0;
     this.usedMaskCheckIds.clear();
     this.usedAnomalyIds.clear();
@@ -773,6 +1102,9 @@ class GameEngine {
       currentStationName: getStopName('G', originStationIdx),
       nextStationName: getStopName('G', seg.stationIndex),
       isOpenAirStation: isElevatedOpenAirStop('G', seg.stationIndex),
+      isOnTrestle: false,
+      trestleProgress: 0,
+      trestleWitnessed: false,
       trainSpeedMps: 2.0,
       segmentElapsedSec: 0,
       segmentDurationSec: durationSec,
@@ -801,6 +1133,16 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      hasRecorder: chapter >= 2,
+      safeHavenVisited: false,
+      trialState: null,
+      falseStopTrials: [],
+      activeRestraint: null,
+      restraintHeld: false,
+      restraintCompleted: false,
+      restraintCeilingBonus: 0,
+      steppedOffAtBait: false,
+      stopDecisions: [],
       sanity: initialSanity,
       sanityTier: initialTier,
       suspicion: 0,
@@ -841,11 +1183,13 @@ class GameEngine {
       : baseDuration;
 
     this.stopElapsedSec = 0;
+    this.havenElapsedSec = 0;
     this.nextStopPaAnnounced = false;
     this.passingTrainTriggered = false;
     this.clockSanityTickApplied = false;
     this.chatPart1Played = false;
     this.chatPart2Played = false;
+    this.restraintTriggeredInSegment = false;
     this.maskChecksTriggeredInSegment = 0;
     this.staringAtAnomalySec = 0;
 
@@ -860,11 +1204,16 @@ class GameEngine {
 
     // Apply DRIFT_ON_CEILING_DROP (-5) if stop band ceiling drops
     const band = SANITY_BANDS_BY_STOP[seg.stopNumber] ?? [0, 100];
+    const maxBand = Math.min(100, band[1] + this.snapshot.restraintCeilingBonus);
     const driftedSanity =
-      this.snapshot.sanity > band[1]
+      this.snapshot.sanity > maxBand
         ? this.snapshot.sanity + SANITY_DELTAS.DRIFT_ON_CEILING_DROP
         : this.snapshot.sanity;
-    const nextSanity = clampSanityForStop(driftedSanity, seg.stopNumber);
+    const nextSanity = clampSanityForStop(
+      driftedSanity,
+      seg.stopNumber,
+      this.snapshot.restraintCeilingBonus
+    );
     const nextTier = computeSanityTier(nextSanity);
 
     const nextAnomalyId = selectAnomalyIdForStretch({
@@ -876,6 +1225,9 @@ class GameEngine {
       this.usedAnomalyIds.add(nextAnomalyId);
     }
 
+    const onTrestle = route === 'G' && seg.id === '12';
+    const nextTrestleWitnessed = this.snapshot.trestleWitnessed || onTrestle;
+
     this.update({
       phase: 'ride',
       rideSubPhase: 'departing',
@@ -885,6 +1237,9 @@ class GameEngine {
       currentStationName: getStopName(route, prevStationIndex),
       nextStationName: getStopName(route, seg.stationIndex),
       isOpenAirStation: isElevatedOpenAirStop(route, seg.stationIndex),
+      isOnTrestle: onTrestle,
+      trestleProgress: 0,
+      trestleWitnessed: nextTrestleWitnessed,
       trainSpeedMps: 1.5,
       segmentElapsedSec: 0,
       segmentDurationSec: durationSec,
@@ -896,6 +1251,7 @@ class GameEngine {
       rollsign: nextRollsign,
       watchingParentLabel: null,
       activeMaskCheck: null,
+      activeRestraint: null,
       activeAnomaly: nextAnomalyId ? buildActiveAnomalyInstance(nextAnomalyId) : null,
       flagHoldProgress: 0,
       isFlagHolding: false,
@@ -936,6 +1292,9 @@ class GameEngine {
       currentStationName: stationName,
       nextStationName: getStopName(route, Math.min(12, seg.stationIndex + 1)),
       isOpenAirStation: openAir,
+      isOnTrestle: openAir,
+      trestleProgress: openAir ? 1 : 0,
+      trestleWitnessed: this.snapshot.trestleWitnessed || openAir,
       trainSpeedMps: 0,
       segmentElapsedSec: this.snapshot.segmentDurationSec,
       stationDistanceM: 0,
@@ -944,6 +1303,7 @@ class GameEngine {
       activeDoorTell: seg.doorTell,
       lightFlickerIntensity: 1.0,
       activeMaskCheck: null,
+      activeRestraint: null,
       watchingParentLabel: null,
       activeAnomaly: null,
       flagHoldProgress: 0,
@@ -951,7 +1311,43 @@ class GameEngine {
       sanity: nextSanity,
     });
 
-    if (!seg.silent) {
+    if (seg.id === '6b') {
+      // Stop 6b is silent PA, Mom says hesitantly:
+      this.showSubtitle(
+        {
+          speaker: 'Mom',
+          text: 'I think this is our… let’s… stretch our legs.',
+        },
+        4.5
+      );
+    } else if (seg.stopType === 'haven') {
+      this.showSubtitle(
+        {
+          speaker: 'Mom',
+          text: 'I think this is our transfer. Let’s stretch our legs.',
+          stageDirection: getArrivalPaText(route, seg),
+        },
+        4.5
+      );
+    } else if (seg.stopType === 'bait') {
+      this.showSubtitle(
+        {
+          speaker: 'Mom',
+          text: 'This is us. Come on, get up.',
+          stageDirection: getArrivalPaText(route, seg),
+        },
+        4.5
+      );
+    } else if (seg.stopType === 'final') {
+      this.showSubtitle(
+        {
+          speaker: 'Mom',
+          text: formatRouteText('Here we are. {terminus}.', route),
+          stageDirection: getArrivalPaText(route, seg),
+        },
+        5.0
+      );
+    } else if (!seg.silent) {
       this.showSubtitle(
         {
           speaker: 'PA',
@@ -1014,6 +1410,23 @@ class GameEngine {
       }
     }
 
+    // Safe Haven platform dwell (Stop 6)
+    if (this.snapshot.phase === 'haven') {
+      this.havenElapsedSec += dtSec;
+      if (this.havenElapsedSec >= 4.2) {
+        this.completeSafeHaven();
+        return;
+      }
+      if (bannerChanged) this.emit();
+      return;
+    }
+
+    // False Stop Trial room phase
+    if (this.snapshot.phase === 'trial') {
+      if (bannerChanged) this.emit();
+      return;
+    }
+
     // 2. Step active mask check countdown
     if (this.snapshot.activeMaskCheck) {
       const nextRem = this.snapshot.activeMaskCheck.remainingSec - dtSec;
@@ -1029,6 +1442,73 @@ class GameEngine {
       };
       if (prevSecInt !== nextSecInt) {
         bannerChanged = true;
+      }
+    }
+
+    // 2b. Step active Stop 11 Restraint moment
+    if (this.snapshot.activeRestraint && this.snapshot.activeRestraint.active) {
+      const cur = this.snapshot.activeRestraint;
+      if (cur.isHolding) {
+        const nextHold = Math.min(1, cur.holdProgress + dtSec / RESTRAINT_HOLD_DURATION_SEC);
+        if (nextHold >= 1) {
+          const nextCeilingBonus = RESTRAINT_CEILING_RAISE;
+          this.update({
+            activeRestraint: null,
+            restraintHeld: true,
+            restraintCompleted: true,
+            restraintCeilingBonus: nextCeilingBonus,
+            sanity: this.snapshot.sanity + SANITY_DELTAS.RESTRAINT_OK,
+            watchingParentLabel: null,
+            lightFlickerIntensity: 1.0,
+          });
+          this.showSubtitle(
+            {
+              stageDirection: 'The lights come back. Everyone is where they were.',
+              text: '',
+            },
+            3.8
+          );
+          return;
+        }
+        const prevBucket = Math.round(cur.holdProgress * 20);
+        const nextBucket = Math.round(nextHold * 20);
+        this.snapshot.activeRestraint = {
+          ...cur,
+          holdProgress: Number(nextHold.toFixed(3)),
+        };
+        if (prevBucket !== nextBucket) bannerChanged = true;
+      } else {
+        const decayRate = cur.holdProgress > 0 ? 1.8 : 1.0;
+        const nextGrace = cur.graceRemainingSec - dtSec * decayRate;
+        if (nextGrace <= 0) {
+          this.update({
+            activeRestraint: null,
+            restraintHeld: false,
+            restraintCompleted: true,
+            sanity: this.snapshot.sanity + SANITY_DELTAS.RESTRAINT_FAIL,
+            suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.MASK_FAIL,
+            lastReactionReason: 'Lost your composure during the restraint moment',
+            watchingParentLabel: null,
+            lightFlickerIntensity: 1.0,
+          });
+          if (this.snapshot.suspicion !== 40) {
+            this.showSubtitle(
+              {
+                stageDirection: 'You flinch. Dad sees it.',
+                text: cur.holdProgress > 0 ? 'You let go' : 'You couldn’t keep it together',
+              },
+              3.8
+            );
+          }
+          return;
+        }
+        const prevTenths = Math.ceil(cur.graceRemainingSec * 10);
+        const nextTenths = Math.ceil(nextGrace * 10);
+        this.snapshot.activeRestraint = {
+          ...cur,
+          graceRemainingSec: Number(nextGrace.toFixed(2)),
+        };
+        if (prevTenths !== nextTenths) bannerChanged = true;
       }
     }
 
@@ -1112,12 +1592,24 @@ class GameEngine {
         );
       }
 
+      // Trigger Stop 11 Greenpoint Av Restraint moment at ~8.2s into stretch 11
+      if (
+        seg.restraint &&
+        !this.restraintTriggeredInSegment &&
+        nextElapsed >= 8.2 &&
+        !this.snapshot.activeRestraint
+      ) {
+        this.triggerRestraintMoment();
+        return;
+      }
+
       // Scheduled parent mask checks (1st at ~9.5s, 2nd at ~14.2s if maskChecksCount === 2)
       if (
         seg.maskChecksCount >= 1 &&
         this.maskChecksTriggeredInSegment === 0 &&
         nextElapsed >= 9.5 &&
-        !this.snapshot.activeMaskCheck
+        !this.snapshot.activeMaskCheck &&
+        !this.snapshot.activeRestraint
       ) {
         this.maskChecksTriggeredInSegment = 1;
         this.triggerMaskCheck();
@@ -1125,7 +1617,8 @@ class GameEngine {
         seg.maskChecksCount >= 2 &&
         this.maskChecksTriggeredInSegment === 1 &&
         nextElapsed >= 14.2 &&
-        !this.snapshot.activeMaskCheck
+        !this.snapshot.activeMaskCheck &&
+        !this.snapshot.activeRestraint
       ) {
         this.maskChecksTriggeredInSegment = 2;
         this.triggerMaskCheck();
@@ -1148,10 +1641,12 @@ class GameEngine {
         for (const cb of this.passingTrainListeners) cb();
       }
 
-      // Parent watching cycle (when not already locked by an active mask check)
+      // Parent watching cycle (when not already locked by an active mask check or restraint)
       let nextWatcher: 'Mom' | 'Dad' | null = this.snapshot.watchingParentLabel;
       if (this.snapshot.activeMaskCheck) {
         nextWatcher = this.snapshot.activeMaskCheck.speakerLabel;
+      } else if (this.snapshot.activeRestraint) {
+        nextWatcher = 'Mom';
       } else if (!seg.silent) {
         const cyclePeriod = this.snapshot.nightmareMode ? 6.2 : 8.4;
         const watchDuration = this.snapshot.nightmareMode ? 3.2 : 2.6;
@@ -1242,11 +1737,22 @@ class GameEngine {
         }
       }
 
-      const nextFlicker = computeArrivalFlickerIntensity(timeRemaining, seg.doorTell);
+      const nextFlicker = this.snapshot.activeRestraint
+        ? 0.08
+        : computeArrivalFlickerIntensity(timeRemaining, seg.doorTell);
       const subPhaseChanged = nextSubPhase !== this.snapshot.rideSubPhase;
       const flickerChanged =
         Math.abs(nextFlicker - this.snapshot.lightFlickerIntensity) > 0.02;
       const watcherChanged = nextWatcher !== this.snapshot.watchingParentLabel;
+
+      const onTrestle = this.snapshot.activeRoute === 'G' && seg.id === '12';
+      this.snapshot.isOnTrestle = onTrestle;
+      this.snapshot.trestleProgress = onTrestle
+        ? Number((nextElapsed / Math.max(1, totalDur)).toFixed(2))
+        : 0;
+      if (onTrestle && !this.snapshot.trestleWitnessed) {
+        this.snapshot.trestleWitnessed = true;
+      }
 
       this.snapshot.segmentElapsedSec = Number(nextElapsed.toFixed(2));
       this.snapshot.trainSpeedMps = Number(nextSpeed.toFixed(2));
@@ -1297,20 +1803,31 @@ class GameEngine {
 
     if (seg.stopType === 'haven') {
       this.update({
+        hasRecorder: true,
         suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.REFUSE_SAFE_HAVEN,
+        lastReactionReason: 'Refused to step off when your parents asked',
       });
+      this.recordStopDecision(seg, false);
+      const nextIdx = this.snapshot.segmentTableIndex + 1;
+      if (nextIdx < SEGMENT_TABLE.length) {
+        this.enterSegment(nextIdx);
+      }
       this.showSubtitle(
         {
           speaker: 'Mom',
           text: 'You don’t want to stretch your legs? …Okay.',
+          stageDirection:
+            'Dad: Here, hold onto this. Your grandfather’s old recorder. Never could get it to stop picking up the radio.',
         },
-        3.5
+        4.2
       );
-    } else {
-      this.update({
-        suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.CLEAN_STOP,
-      });
+      return;
     }
+
+    this.update({
+      suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.CLEAN_STOP,
+    });
+    this.recordStopDecision(seg, false);
 
     const nextIdx = this.snapshot.segmentTableIndex + 1;
     if (nextIdx < SEGMENT_TABLE.length) {
@@ -1333,26 +1850,30 @@ class GameEngine {
       this.snapshot.segmentTableIndex + 1
     );
 
+    // Stop 6 Safe Haven: restores +15 sanity, hands over grandfather's tape recorder, enters 'haven' phase
     if (seg.stopType === 'haven') {
+      this.havenElapsedSec = 0;
       this.update({
+        phase: 'haven',
+        safeHavenVisited: true,
+        hasRecorder: true,
         sanity: this.snapshot.sanity + SANITY_DELTAS.SAFE_HAVEN,
       });
-      this.enterSegment(nextIdx);
+      this.recordStopDecision(seg, true);
       this.showSubtitle(
         {
           speaker: 'Dad',
-          text: formatRouteText(
-            'Feels good to stand up, right? Couple more stops after this. Then {terminus}.',
-            route
-          ),
-          stageDirection: 'You get back on with them.',
+          text: 'Here. Your grandfather’s. He used it on the night shift. Never could get it to stop picking up the radio.',
+          stageDirection: 'Dad gave you a tape recorder. Press R to raise it.',
         },
-        4.5
+        4.2
       );
       return;
     }
 
+    // Stop 4 Forgiving False Stop: Mom grabs your sleeve
     if (seg.stopType === 'false' && seg.forgivingFalseStop) {
+      this.recordStopDecision(seg, true);
       this.enterSegment(nextIdx);
       this.showSubtitle(
         {
@@ -1365,32 +1886,53 @@ class GameEngine {
       return;
     }
 
-    if (seg.stopType === 'false' || seg.stopType === 'bait') {
+    // Stop 12 (21 St) False Stop Bait: stepping off ends the ride with Ending #2: The Eternal Commute
+    if (seg.stopType === 'bait') {
+      pointerLock.unlock({ quiet: true });
       this.update({
-        sanity: this.snapshot.sanity + SANITY_DELTAS.TRIAL,
-      });
-      this.enterSegment(nextIdx);
-      this.showSubtitle(
-        {
+        phase: 'end',
+        paused: false,
+        trainSpeedMps: 0,
+        steppedOffAtBait: true,
+        activeMaskCheck: null,
+        watchingParentLabel: null,
+        lastReactionReason: 'Stepped off at a False Stop',
+        subtitle: {
+          id: 'bait-eternal-commute',
           speaker: 'Mom',
-          text: 'Where did you go?! You can’t just walk off like that!',
+          text: formatRouteText(
+            'The doors open. The sign says {origin}. Mom stands up and smooths her coat. “This is us,” she says.',
+            route
+          ),
         },
-        4.2
-      );
+      });
+      this.recordStopDecision(seg, true);
       return;
     }
 
+    // Non-forgiving False Stops (Stop 6b, Stop 9): enters the False Stop Trial room
+    if (seg.stopType === 'false') {
+      this.recordStopDecision(seg, true);
+      this.enterTrialRoom(seg.stopNumber);
+      return;
+    }
+
+    // Ordinary real stop: Dad calls you back inside
+    this.recordStopDecision(seg, true);
     this.enterSegment(nextIdx);
     this.showSubtitle(
       {
         speaker: 'Dad',
         text: 'Hey! Where are you going? Get back in here.',
+        stageDirection: 'Stepped off at a real stop',
       },
       3.8
     );
   }
 
   public chooseCourtSqExit(choice: ExitChoiceId): void {
+    const seg = this.getCurrentSegmentRule();
+    this.recordStopDecision(seg, true);
     pointerLock.unlock({ quiet: true });
     const stageText =
       choice === 'escalators'
@@ -1412,6 +1954,7 @@ class GameEngine {
       trainSpeedMps: 0,
       selectedExit: choice,
       activeMaskCheck: null,
+      activeRestraint: null,
       watchingParentLabel: null,
       subtitle: {
         id: 'exit-choice',
@@ -1433,6 +1976,9 @@ class GameEngine {
       currentStationName: getStopName('G', 0),
       nextStationName: getStopName('G', 1),
       isOpenAirStation: false,
+      isOnTrestle: false,
+      trestleProgress: 0,
+      trestleWitnessed: false,
       trainSpeedMps: 0,
       doorOpenProgress: 0,
       chimePlaying: false,
@@ -1452,6 +1998,16 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      hasRecorder: false,
+      safeHavenVisited: false,
+      trialState: null,
+      falseStopTrials: [],
+      activeRestraint: null,
+      restraintHeld: false,
+      restraintCompleted: false,
+      restraintCeilingBonus: 0,
+      steppedOffAtBait: false,
+      stopDecisions: [],
       sanity: 100,
       suspicion: 0,
       peakSuspicion: 0,
@@ -1490,13 +2046,18 @@ class GameEngine {
     const seg = this.getCurrentSegmentRule();
     const prevStationIdx = Math.max(0, seg.stationIndex - 1);
     const currentStationIdx =
-      this.snapshot.phase === 'stop' ? seg.stationIndex : prevStationIdx;
+      this.snapshot.phase === 'stop' || this.snapshot.phase === 'haven'
+        ? seg.stationIndex
+        : prevStationIdx;
+    const openAir = isElevatedOpenAirStop(route, seg.stationIndex);
+    const onTrestle = route === 'G' && seg.id === '12';
 
     this.update({
       activeRoute: route,
       currentStationName: getStopName(route, currentStationIdx),
       nextStationName: getStopName(route, seg.stationIndex),
-      isOpenAirStation: isElevatedOpenAirStop(route, seg.stationIndex),
+      isOpenAirStation: openAir,
+      isOnTrestle: onTrestle || openAir,
     });
   }
 
@@ -1534,4 +2095,5 @@ export const gameEngine = new GameEngine();
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__gameEngine = gameEngine;
 }
+
 

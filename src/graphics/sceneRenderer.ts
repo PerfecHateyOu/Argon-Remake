@@ -25,6 +25,8 @@ import type { RouteLineId } from '../types';
 import { buildCarCharacters, type CarCharactersRig } from './characterBuilder';
 import { buildPassingTrain, type PassingTrainRig } from './passingTrain';
 import { buildSubwayConsist, type SubwayConsistRig } from './subwayCarBuilder';
+import { buildNewtownCreekTrestle, type TrestleRig } from './trestleBuilder';
+import { buildTrialRoom, TRIAL_ROOM_ORIGIN_Y, type TrialRoomRig } from './trialBuilder';
 import { buildTunnelAndStations, type TunnelAndStationRig } from './tunnelBuilder';
 
 /**
@@ -73,6 +75,8 @@ export class SceneRenderer {
 
   private consistRig: SubwayConsistRig;
   private tunnelRig: TunnelAndStationRig;
+  private trestleRig: TrestleRig;
+  private trialRig: TrialRoomRig;
   private passingTrainRig: PassingTrainRig;
   private charactersRig: CarCharactersRig;
   private pooledFluorescentLights: THREE.PointLight[] = [];
@@ -133,6 +137,12 @@ export class SceneRenderer {
 
     this.tunnelRig = buildTunnelAndStations(maxAnisotropy);
     this.scene.add(this.tunnelRig.root);
+
+    this.trestleRig = buildNewtownCreekTrestle();
+    this.scene.add(this.trestleRig.group);
+
+    this.trialRig = buildTrialRoom();
+    this.scene.add(this.trialRig.group);
 
     this.passingTrainRig = buildPassingTrain();
     this.scene.add(this.passingTrainRig.root);
@@ -228,7 +238,7 @@ export class SceneRenderer {
     this.charactersRig.applyCharacterAnomaly(snap.activeAnomaly);
 
     const targetStationName =
-      snap.phase === 'stop' || snap.rideSubPhase === 'departing'
+      snap.phase === 'stop' || snap.phase === 'haven' || snap.rideSubPhase === 'departing'
         ? snap.currentStationName
         : snap.nextStationName;
 
@@ -310,10 +320,20 @@ export class SceneRenderer {
         _euler.set(-0.03, 0, 0, 'YXZ');
         this.camera.quaternion.setFromEuler(_euler);
         this.tunnelRig.step(clampedDtSec, 8.0, 200, false);
+        this.trestleRig.update(clampedDtSec, this.elapsedSec, 0, false);
+        this.trialRig.update(this.elapsedSec, null, snap.activeRoute);
         this.consistRig.updateSideDoors(0);
         this.consistRig.setCeilingLightIntensity(1.0);
         this.updateLightPoolPositions(PLAYER_SEAT_X, 1.0, false);
         this.charactersRig.step(clampedDtSec, this.elapsedSec, PLAYER_SEAT_X, PLAYER_SEAT_Z, null);
+      } else if (snap.phase === 'trial') {
+        const kin = playerController.step(clampedDtSec, snap.phase);
+        this.camera.position.set(0, TRIAL_ROOM_ORIGIN_Y + 1.62, 1.8);
+        _euler.set(kin.pitch, kin.yaw, 0, 'YXZ');
+        this.camera.quaternion.setFromEuler(_euler);
+        this.trialRig.update(this.elapsedSec, snap.trialState, snap.activeRoute);
+        this.trestleRig.update(clampedDtSec, this.elapsedSec, 0, false);
+        gameEngine.syncPlayerPose(0, 1.8, kin.yaw, kin.pitch);
       } else {
         const kin = playerController.step(clampedDtSec, snap.phase);
         const walkSpeed = Math.hypot(kin.vx, kin.vz);
@@ -343,12 +363,20 @@ export class SceneRenderer {
         this.consistRig.setCeilingLightIntensity(snap.lightFlickerIntensity);
         this.updateLightPoolPositions(kin.x, snap.lightFlickerIntensity, coldPanelActive);
 
+        const openAirView = snap.isOpenAirStation || snap.isOnTrestle;
         this.tunnelRig.step(
           clampedDtSec,
           snap.trainSpeedMps,
           snap.stationDistanceM,
-          snap.isOpenAirStation
+          openAirView
         );
+        this.trestleRig.update(
+          clampedDtSec,
+          this.elapsedSec,
+          snap.trainSpeedMps,
+          snap.isOnTrestle
+        );
+        this.trialRig.update(this.elapsedSec, null, snap.activeRoute);
         this.passingTrainRig.step(clampedDtSec, snap.trainSpeedMps);
         this.charactersRig.step(
           clampedDtSec,
@@ -394,6 +422,8 @@ export class SceneRenderer {
     this.unsubPassingTrain?.();
     this.consistRig.dispose();
     this.tunnelRig.dispose();
+    this.trestleRig.dispose();
+    this.trialRig.dispose();
     this.passingTrainRig.dispose();
     this.charactersRig.dispose();
     if (this.scene.environment) {
@@ -402,3 +432,4 @@ export class SceneRenderer {
     this.renderer.dispose();
   }
 }
+

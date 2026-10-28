@@ -328,14 +328,6 @@ export function buildTunnelAndStations(maxAnisotropy = 4): TunnelAndStationRig {
   elevatedCanopy.position.set(0, 2.78, STATION_PLATFORM_Z);
   elevatedGroup.add(elevatedCanopy);
 
-  const nightSkyBackdrop = new THREE.Mesh(
-    new THREE.PlaneGeometry(STATION_PLATFORM_LENGTH + 20, 9.0),
-    elevatedSkyBackdropMat
-  );
-  geometries.push(nightSkyBackdrop.geometry);
-  nightSkyBackdrop.position.set(0, 3.6, -7.8);
-  elevatedGroup.add(nightSkyBackdrop);
-
   stationGroup.add(elevatedGroup);
 
   // Columns aligned with car window pillars so they never block window centers
