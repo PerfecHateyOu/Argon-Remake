@@ -4,6 +4,9 @@ import {
   DEPARTURE_ACCEL_DURATION_SEC,
   DOOR_CHIME_DURATION_SEC,
   EARLY_DOOR_OPEN_DELAY_SEC,
+  EVP_FREQ_DEFAULT_MHZ,
+  EVP_FREQ_STEP_MHZ,
+  EVP_RECORD_DURATION_SEC,
   GOVERNOR_FRAME_TIME_THRESHOLD_MS,
   GOVERNOR_PIXEL_RATIO_STEP,
   GOVERNOR_SAMPLE_FRAMES,
@@ -13,6 +16,8 @@ import {
   PA_NEXT_STOP_ANNOUNCE_SEC,
   PLAYER_SEAT_X,
   PLAYER_SEAT_Z,
+  POLAROID_FLASH_DECAY_PER_SEC,
+  POLAROID_MAX_SHOTS,
   RESTRAINT_CEILING_RAISE,
   RESTRAINT_GRACE_SECONDS,
   ROLLSIGN_DISPLAY_SEC,
@@ -36,6 +41,7 @@ import type {
   ChapterStartOption,
   DoorTellType,
   EngineSnapshot,
+  EvpSignalId,
   ExitChoiceId,
   FalseStopTrialRecord,
   GamePhase,
@@ -56,6 +62,16 @@ import {
   shouldAnomalyManifest,
   stepFlagHoldProgress,
 } from './anomalyManager';
+import {
+  buildEvpTapeRecord,
+  clampEvpFrequency,
+  evaluateEvpTuning,
+} from './evpManager';
+import {
+  buildPolaroidPhotoRecord,
+  captureSquarePolaroidDataUrl,
+  isAnomalyFramedInViewfinder,
+} from './polaroidManager';
 import {
   buildActiveMaskCheck,
   DAD_UNASKED_ANSWERS,
@@ -244,7 +260,25 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      cameraOpen: false,
+      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidFlashIntensity: 0,
+      photos: [],
+      albumOpen: false,
       hasRecorder: false,
+      evpOpen: false,
+      evpFrequencyMhz: EVP_FREQ_DEFAULT_MHZ,
+      evpSignalStrength: 0,
+      evpLockedSignalId: null,
+      evpLockedTitle: null,
+      evpTranscriptLive: null,
+      evpIsRecording: false,
+      evpRecordProgress: 0,
+      evpLastSavedTitle: null,
+      tapes: [],
+      playingTapeId: null,
+      hasConductorEvp: false,
+      hasSecretBroadcasterEvp: false,
       safeHavenVisited: false,
       trialState: null,
       falseStopTrials: [],
@@ -743,6 +777,218 @@ class GameEngine {
   }
 
   /**
+   * Raises or lowers the Polaroid 600 camera (C key or Camera HUD button).
+   */
+  public toggleCamera(force?: boolean): void {
+    if (this.snapshot.phase === 'menu' || this.snapshot.phase === 'end') return;
+    if (this.snapshot.activeMaskCheck) {
+      this.showSubtitle({ text: 'Answer first.' }, 2.0);
+      return;
+    }
+    if (this.snapshot.activeRestraint) {
+      this.showSubtitle({ text: 'Not now. Keep holding.' }, 2.0);
+      return;
+    }
+
+    const nextOpen = typeof force === 'boolean' ? force : !this.snapshot.cameraOpen;
+    this.update({
+      cameraOpen: nextOpen,
+      evpOpen: nextOpen ? false : this.snapshot.evpOpen,
+      albumOpen: nextOpen ? false : this.snapshot.albumOpen,
+      evpIsRecording: nextOpen ? false : this.snapshot.evpIsRecording,
+    });
+  }
+
+  /**
+   * Snaps a Polaroid 600 square photo.
+   * - Consumes 1 of the 6 shots.
+   * - Triggers white flash overlay.
+   * - If an active manifested anomaly is framed in the viewfinder, catches it (+2 Sanity, caughtByPhoto = true).
+   * - If a parent is watching, adds +12 Suspicion ("Took a flash photo while ${watcher.label} was watching").
+   */
+  public snapPolaroidPhoto(sourceCanvas?: HTMLCanvasElement | null): boolean {
+    if (this.snapshot.polaroidShotsRemaining <= 0) {
+      this.showSubtitle({ text: 'Out of film.' }, 2.2);
+      return false;
+    }
+
+    const seg = this.getCurrentSegmentRule();
+    const camY = playerController.getState().y || 1.24;
+    const framedAnomaly = isAnomalyFramedInViewfinder({
+      activeAnomaly: this.snapshot.activeAnomaly,
+      playerX: this.snapshot.playerX,
+      playerEyeY: camY,
+      playerZ: this.snapshot.playerZ,
+      playerYaw: this.snapshot.playerYaw,
+      playerPitch: this.snapshot.playerPitch,
+    })
+      ? this.snapshot.activeAnomaly
+      : null;
+
+    if (framedAnomaly) {
+      this.catchActiveAnomaly(true);
+    }
+
+    const dataUrl = captureSquarePolaroidDataUrl({
+      sourceCanvas,
+      stopNumber: seg.stopNumber,
+      stationName: this.snapshot.nextStationName,
+      anomalyTitle: framedAnomaly ? framedAnomaly.title : null,
+    });
+
+    const newPhoto = buildPolaroidPhotoRecord({
+      photoIndex: this.snapshot.photos.length + 1,
+      stopNumber: seg.stopNumber,
+      stationName: this.snapshot.nextStationName,
+      carLocation: this.snapshot.carLocation,
+      routeId: this.snapshot.activeRoute,
+      capturedAnomaly: framedAnomaly,
+      dataUrl,
+      capturedAtSec: this.snapshot.segmentElapsedSec,
+      developed: false,
+    });
+
+    const watcher = this.snapshot.watchingParentLabel;
+    const nextSuspicion = watcher
+      ? this.snapshot.suspicion + SUSPICION_DELTAS.CAMERA_FLASH_WATCHED
+      : this.snapshot.suspicion;
+    const nextReason = watcher
+      ? `Took a flash photo while ${watcher} was watching`
+      : this.snapshot.lastReactionReason;
+
+    this.update({
+      polaroidShotsRemaining: this.snapshot.polaroidShotsRemaining - 1,
+      polaroidFlashIntensity: 1.0,
+      photos: [...this.snapshot.photos, newPhoto],
+      suspicion: nextSuspicion,
+      lastReactionReason: nextReason,
+    });
+
+    return Boolean(framedAnomaly);
+  }
+
+  /**
+   * Opens or closes the Evidence Log album modal (Tab key or Evidence log HUD button).
+   */
+  public toggleAlbum(force?: boolean): void {
+    if (this.snapshot.phase === 'menu') return;
+    const nextOpen = typeof force === 'boolean' ? force : !this.snapshot.albumOpen;
+    if (nextOpen) {
+      pointerLock.unlock({ quiet: true });
+    }
+    this.update({
+      albumOpen: nextOpen,
+      cameraOpen: nextOpen ? false : this.snapshot.cameraOpen,
+      evpOpen: nextOpen ? false : this.snapshot.evpOpen,
+    });
+  }
+
+  /**
+   * Raises or lowers Dad's EVP microcassette recorder (R key or Tape recorder HUD button).
+   */
+  public toggleEvpRecorder(force?: boolean): void {
+    if (this.snapshot.phase === 'menu' || this.snapshot.phase === 'end') return;
+    if (!this.snapshot.hasRecorder) {
+      this.showSubtitle({ text: 'You don’t have anything to record with.' }, 2.4);
+      return;
+    }
+    if (this.snapshot.activeMaskCheck) {
+      this.showSubtitle({ text: 'Answer first.' }, 2.0);
+      return;
+    }
+    if (this.snapshot.activeRestraint) {
+      this.showSubtitle({ text: 'Not now. Keep holding.' }, 2.0);
+      return;
+    }
+
+    const nextOpen = typeof force === 'boolean' ? force : !this.snapshot.evpOpen;
+    const evalRes = evaluateEvpTuning({
+      frequencyMhz: this.snapshot.evpFrequencyMhz,
+      trainSpeedMps: this.snapshot.trainSpeedMps,
+      route: this.snapshot.activeRoute,
+      isAboveGround: this.snapshot.isOnTrestle || this.snapshot.isOpenAirStation,
+    });
+
+    this.update({
+      evpOpen: nextOpen,
+      cameraOpen: nextOpen ? false : this.snapshot.cameraOpen,
+      albumOpen: nextOpen ? false : this.snapshot.albumOpen,
+      evpIsRecording: nextOpen ? this.snapshot.evpIsRecording : false,
+      evpRecordProgress: nextOpen ? this.snapshot.evpRecordProgress : 0,
+      evpSignalStrength: evalRes.signalStrength,
+      evpLockedSignalId: evalRes.lockedSpec ? evalRes.lockedSpec.id : null,
+      evpLockedTitle: evalRes.lockedTitle,
+      evpTranscriptLive: evalRes.liveTranscript,
+    });
+  }
+
+  /**
+   * Steps the EVP dial frequency by `deltaSteps * 0.05 MHz` (5 kHz step).
+   */
+  public stepEvpFrequency(deltaSteps: number): void {
+    const nextFreq = clampEvpFrequency(
+      this.snapshot.evpFrequencyMhz + deltaSteps * EVP_FREQ_STEP_MHZ
+    );
+    this.setEvpFrequency(nextFreq);
+  }
+
+  /**
+   * Sets the EVP dial frequency directly and updates signal lock state.
+   */
+  public setEvpFrequency(freqMhz: number): void {
+    const clamped = clampEvpFrequency(freqMhz);
+    const evalRes = evaluateEvpTuning({
+      frequencyMhz: clamped,
+      trainSpeedMps: this.snapshot.trainSpeedMps,
+      route: this.snapshot.activeRoute,
+      isAboveGround: this.snapshot.isOnTrestle || this.snapshot.isOpenAirStation,
+    });
+
+    this.update({
+      evpFrequencyMhz: clamped,
+      evpSignalStrength: evalRes.signalStrength,
+      evpLockedSignalId: evalRes.lockedSpec ? evalRes.lockedSpec.id : null,
+      evpLockedTitle: evalRes.lockedTitle,
+      evpTranscriptLive: evalRes.liveTranscript,
+      evpRecordProgress: 0,
+    });
+  }
+
+  /**
+   * Starts or stops holding Record on the EVP microcassette recorder.
+   */
+  public setEvpRecording(recording: boolean): void {
+    if (!this.snapshot.evpOpen && recording) return;
+    if (this.snapshot.evpIsRecording === recording) return;
+    this.update({
+      evpIsRecording: recording,
+      evpRecordProgress: recording ? this.snapshot.evpRecordProgress : 0,
+    });
+  }
+
+  /**
+   * Plays or stops a recorded EVP tape in the Evidence Log or HUD.
+   * Playing a tape out loud while a parent is watching adds +8 Suspicion.
+   */
+  public toggleTapePlayback(tapeId: EvpSignalId): void {
+    const isAlreadyPlaying = this.snapshot.playingTapeId === tapeId;
+    const nextPlaying = isAlreadyPlaying ? null : tapeId;
+
+    const watcher = this.snapshot.watchingParentLabel;
+    const playedWhileWatched = Boolean(nextPlaying && watcher);
+
+    this.update({
+      playingTapeId: nextPlaying,
+      suspicion: playedWhileWatched
+        ? this.snapshot.suspicion + SUSPICION_DELTAS.TAPE_PLAYED_WATCHED
+        : this.snapshot.suspicion,
+      lastReactionReason: playedWhileWatched
+        ? `Played a tape out loud while ${watcher} was watching`
+        : this.snapshot.lastReactionReason,
+    });
+  }
+
+  /**
    * Starts the Stop 11 Greenpoint Av Restraint moment (2.5 s initial grace window, 4.0 s hold).
    */
   public triggerRestraintMoment(): void {
@@ -1133,7 +1379,25 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      cameraOpen: false,
+      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidFlashIntensity: 0,
+      photos: [],
+      albumOpen: false,
       hasRecorder: chapter >= 2,
+      evpOpen: false,
+      evpFrequencyMhz: EVP_FREQ_DEFAULT_MHZ,
+      evpSignalStrength: 0,
+      evpLockedSignalId: null,
+      evpLockedTitle: null,
+      evpTranscriptLive: null,
+      evpIsRecording: false,
+      evpRecordProgress: 0,
+      evpLastSavedTitle: null,
+      tapes: [],
+      playingTapeId: null,
+      hasConductorEvp: false,
+      hasSecretBroadcasterEvp: false,
       safeHavenVisited: false,
       trialState: null,
       falseStopTrials: [],
@@ -1408,6 +1672,15 @@ class GameEngine {
         this.snapshot.paranoidFlashText = null;
         bannerChanged = true;
       }
+    }
+
+    if (this.snapshot.polaroidFlashIntensity > 0) {
+      const nextFlash = Math.max(
+        0,
+        this.snapshot.polaroidFlashIntensity - POLAROID_FLASH_DECAY_PER_SEC * dtSec
+      );
+      this.snapshot.polaroidFlashIntensity = Number(nextFlash.toFixed(2));
+      bannerChanged = true;
     }
 
     // Safe Haven platform dwell (Stop 6)
@@ -1737,6 +2010,72 @@ class GameEngine {
         }
       }
 
+      // Step EVP Microcassette Recorder tuning, recording & parent-watching suspicion
+      if (this.snapshot.evpOpen) {
+        const evalRes = evaluateEvpTuning({
+          frequencyMhz: this.snapshot.evpFrequencyMhz,
+          trainSpeedMps: nextSpeed,
+          route: this.snapshot.activeRoute,
+          isAboveGround:
+            (this.snapshot.activeRoute === 'G' && seg.id === '12') ||
+            this.snapshot.isOpenAirStation,
+        });
+
+        this.snapshot.evpSignalStrength = evalRes.signalStrength;
+        this.snapshot.evpLockedSignalId = evalRes.lockedSpec ? evalRes.lockedSpec.id : null;
+        this.snapshot.evpLockedTitle = evalRes.lockedTitle;
+        this.snapshot.evpTranscriptLive = evalRes.liveTranscript;
+
+        if (nextWatcher !== null) {
+          const nextSusp =
+            this.snapshot.suspicion + SUSPICION_DELTAS.RECORDER_HELD_PER_SEC * dtSec;
+          this.update({
+            suspicion: nextSusp,
+            lastReactionReason: `Held up a tape recorder while ${nextWatcher} was watching`,
+          });
+          bannerChanged = true;
+        }
+
+        if (this.snapshot.evpIsRecording && evalRes.lockedSpec) {
+          const nextRecProg = Math.min(
+            1,
+            this.snapshot.evpRecordProgress + dtSec / EVP_RECORD_DURATION_SEC
+          );
+          if (nextRecProg >= 1) {
+            const spec = evalRes.lockedSpec;
+            const newTape = buildEvpTapeRecord({
+              spec,
+              route: this.snapshot.activeRoute,
+              isAboveGround:
+                (this.snapshot.activeRoute === 'G' && seg.id === '12') ||
+                this.snapshot.isOpenAirStation,
+              stopNumber: seg.stopNumber,
+            });
+            const alreadyRecorded = this.snapshot.tapes.some((t) => t.id === newTape.id);
+            const nextTapes = alreadyRecorded
+              ? this.snapshot.tapes.map((t) => (t.id === newTape.id ? newTape : t))
+              : [...this.snapshot.tapes, newTape];
+
+            this.update({
+              tapes: nextTapes,
+              evpIsRecording: false,
+              evpRecordProgress: 0,
+              evpLastSavedTitle: newTape.title,
+              hasConductorEvp: this.snapshot.hasConductorEvp || spec.isConductor,
+              hasSecretBroadcasterEvp:
+                this.snapshot.hasSecretBroadcasterEvp || spec.isSecretBroadcaster,
+            });
+            bannerChanged = true;
+          } else {
+            this.snapshot.evpRecordProgress = Number(nextRecProg.toFixed(2));
+            bannerChanged = true;
+          }
+        } else if (!this.snapshot.evpIsRecording && this.snapshot.evpRecordProgress > 0) {
+          this.snapshot.evpRecordProgress = 0;
+          bannerChanged = true;
+        }
+      }
+
       const nextFlicker = this.snapshot.activeRestraint
         ? 0.08
         : computeArrivalFlickerIntensity(timeRemaining, seg.doorTell);
@@ -1894,6 +2233,10 @@ class GameEngine {
         paused: false,
         trainSpeedMps: 0,
         steppedOffAtBait: true,
+        cameraOpen: false,
+        evpOpen: false,
+        evpIsRecording: false,
+        photos: this.snapshot.photos.map((p) => ({ ...p, developed: true })),
         activeMaskCheck: null,
         watchingParentLabel: null,
         lastReactionReason: 'Stepped off at a False Stop',
@@ -1953,6 +2296,10 @@ class GameEngine {
       paused: false,
       trainSpeedMps: 0,
       selectedExit: choice,
+      cameraOpen: false,
+      evpOpen: false,
+      evpIsRecording: false,
+      photos: this.snapshot.photos.map((p) => ({ ...p, developed: true })),
       activeMaskCheck: null,
       activeRestraint: null,
       watchingParentLabel: null,
@@ -1998,7 +2345,25 @@ class GameEngine {
       anomaliesSpawnedCount: 0,
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
+      cameraOpen: false,
+      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidFlashIntensity: 0,
+      photos: [],
+      albumOpen: false,
       hasRecorder: false,
+      evpOpen: false,
+      evpFrequencyMhz: EVP_FREQ_DEFAULT_MHZ,
+      evpSignalStrength: 0,
+      evpLockedSignalId: null,
+      evpLockedTitle: null,
+      evpTranscriptLive: null,
+      evpIsRecording: false,
+      evpRecordProgress: 0,
+      evpLastSavedTitle: null,
+      tapes: [],
+      playingTapeId: null,
+      hasConductorEvp: false,
+      hasSecretBroadcasterEvp: false,
       safeHavenVisited: false,
       trialState: null,
       falseStopTrials: [],

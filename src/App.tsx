@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnalogRollsign } from './components/AnalogRollsign';
+import { EvpRecorder } from './components/EvpRecorder';
 import { MoveStick } from './components/MoveStick';
+import { PolaroidAlbum } from './components/PolaroidAlbum';
+import { PolaroidViewfinder } from './components/PolaroidViewfinder';
 import { RouteSelector } from './components/RouteSelector';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StartScreen } from './components/StartScreen';
@@ -64,17 +67,27 @@ export default function App() {
   // Global keyboard shortcuts (P/Esc pause, M mute, L route selector, E step off at stop, F flag hold, Space restraint hold, 1/2/3 mask check/trial/exit, ` debug overlay)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (settingsOpen || caseFilesOpen || routeSelectorOpen) {
-        if (e.key === 'Escape') {
+      if (settingsOpen || caseFilesOpen || routeSelectorOpen || snapshot.albumOpen) {
+        if (e.key === 'Escape' || (e.key === 'Tab' && snapshot.albumOpen)) {
+          e.preventDefault();
           setSettingsOpen(false);
           setCaseFilesOpen(false);
           setRouteSelectorOpen(false);
+          if (snapshot.albumOpen) {
+            gameEngine.toggleAlbum(false);
+          }
         }
         return;
       }
 
       if (e.key === '`') {
         settingsStore.update({ debugOverlay: !settingsStore.get().debugOverlay });
+        return;
+      }
+
+      if (e.key === 'Tab' && snapshot.phase !== 'menu') {
+        e.preventDefault();
+        gameEngine.toggleAlbum();
         return;
       }
 
@@ -85,6 +98,57 @@ export default function App() {
       ) {
         e.preventDefault();
         gameEngine.setRestraintHolding(true);
+        return;
+      }
+
+      if ((e.code === 'Space' || e.key === ' ') && snapshot.evpOpen && !snapshot.paused) {
+        e.preventDefault();
+        gameEngine.setEvpRecording(true);
+        return;
+      }
+
+      if ((e.code === 'Space' || e.key === ' ') && snapshot.cameraOpen && !snapshot.paused) {
+        e.preventDefault();
+        if (!e.repeat) {
+          gameEngine.snapPolaroidPhoto(rendererRef.current?.getCanvas());
+        }
+        return;
+      }
+
+      if (snapshot.evpOpen && !snapshot.paused) {
+        if (e.key === '[') {
+          e.preventDefault();
+          gameEngine.stepEvpFrequency(-1);
+          return;
+        }
+        if (e.key === ']') {
+          e.preventDefault();
+          gameEngine.stepEvpFrequency(1);
+          return;
+        }
+      }
+
+      if (
+        (e.key === 'c' || e.key === 'C' || e.code === 'KeyC') &&
+        snapshot.phase !== 'menu' &&
+        snapshot.phase !== 'end' &&
+        !snapshot.paused &&
+        !e.repeat
+      ) {
+        e.preventDefault();
+        gameEngine.toggleCamera();
+        return;
+      }
+
+      if (
+        (e.key === 'r' || e.key === 'R' || e.code === 'KeyR') &&
+        snapshot.phase !== 'menu' &&
+        snapshot.phase !== 'end' &&
+        !snapshot.paused &&
+        !e.repeat
+      ) {
+        e.preventDefault();
+        gameEngine.toggleEvpRecorder();
         return;
       }
 
@@ -160,6 +224,14 @@ export default function App() {
         snapshot.phase !== 'menu' &&
         snapshot.phase !== 'end'
       ) {
+        if (snapshot.cameraOpen) {
+          gameEngine.toggleCamera(false);
+          return;
+        }
+        if (snapshot.evpOpen) {
+          gameEngine.toggleEvpRecorder(false);
+          return;
+        }
         gameEngine.togglePause();
       }
     };
@@ -170,12 +242,14 @@ export default function App() {
       }
       if (e.code === 'Space' || e.key === ' ') {
         gameEngine.setRestraintHolding(false);
+        gameEngine.setEvpRecording(false);
       }
     };
 
     const handleBlur = () => {
       gameEngine.setFlagHolding(false);
       gameEngine.setRestraintHolding(false);
+      gameEngine.setEvpRecording(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -190,6 +264,9 @@ export default function App() {
     settingsOpen,
     caseFilesOpen,
     routeSelectorOpen,
+    snapshot.albumOpen,
+    snapshot.cameraOpen,
+    snapshot.evpOpen,
     snapshot.phase,
     snapshot.paused,
     snapshot.activeMaskCheck,
@@ -328,15 +405,55 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 pointer-events-auto">
+            <div className="flex flex-wrap items-center justify-end gap-2 pointer-events-auto">
+              <button
+                type="button"
+                tabIndex={-1}
+                data-testid="camera-hud-button"
+                aria-label="Polaroid Camera"
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  gameEngine.toggleCamera();
+                }}
+                className={`px-3 py-1.5 border text-xs font-mono cursor-pointer whitespace-nowrap ${
+                  snapshot.cameraOpen
+                    ? 'border-[#ffcf8a] bg-[#ffcf8a] text-[#080a08] font-semibold'
+                    : 'border-[#e6e2d8]/25 bg-[#080a08]/90 text-[#e6e2d8] hover:border-[#fff0d4]'
+                }`}
+              >
+                Camera (C) · {snapshot.polaroidShotsRemaining}
+              </button>
               {snapshot.hasRecorder && (
-                <div
+                <button
+                  type="button"
+                  tabIndex={-1}
                   data-testid="recorder-hud-badge"
-                  className="px-3 py-1.5 border border-[#ffcf8a]/40 bg-[#080a08]/90 text-xs font-mono text-[#ffcf8a] whitespace-nowrap"
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    gameEngine.toggleEvpRecorder();
+                  }}
+                  className={`px-3 py-1.5 border text-xs font-mono cursor-pointer whitespace-nowrap ${
+                    snapshot.evpOpen
+                      ? 'border-[#ffcf8a] bg-[#ffcf8a] text-[#080a08] font-semibold'
+                      : 'border-[#ffcf8a]/40 bg-[#080a08]/90 text-[#ffcf8a] hover:border-[#ffcf8a]'
+                  }`}
                 >
                   Tape recorder (R)
-                </div>
+                </button>
               )}
+              <button
+                type="button"
+                tabIndex={-1}
+                data-testid="evidence-log-hud-button"
+                aria-label="Evidence Log"
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  gameEngine.toggleAlbum();
+                }}
+                className="px-3 py-1.5 border border-[#e6e2d8]/25 bg-[#080a08]/90 text-xs text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer whitespace-nowrap"
+              >
+                Evidence log (Tab)
+              </button>
               <button
                 type="button"
                 tabIndex={-1}
@@ -769,6 +886,46 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Polaroid 600 Square Viewfinder & Flash Overlay */}
+      <PolaroidViewfinder
+        open={snapshot.cameraOpen}
+        shotsRemaining={snapshot.polaroidShotsRemaining}
+        flashIntensity={snapshot.polaroidFlashIntensity}
+        onSnap={() => {
+          gameEngine.snapPolaroidPhoto(rendererRef.current?.getCanvas());
+        }}
+        onLower={() => gameEngine.toggleCamera(false)}
+      />
+
+      {/* EVP Microcassette Recorder Overlay */}
+      <EvpRecorder
+        open={snapshot.evpOpen}
+        frequencyMhz={snapshot.evpFrequencyMhz}
+        signalStrength={snapshot.evpSignalStrength}
+        lockedSignalId={snapshot.evpLockedSignalId}
+        lockedTitle={snapshot.evpLockedTitle}
+        liveTranscript={snapshot.evpTranscriptLive}
+        isRecording={snapshot.evpIsRecording}
+        recordProgress={snapshot.evpRecordProgress}
+        lastSavedTitle={snapshot.evpLastSavedTitle}
+        trainSpeedMps={snapshot.trainSpeedMps}
+        onStepFrequency={(steps) => gameEngine.stepEvpFrequency(steps)}
+        onSetRecording={(rec) => gameEngine.setEvpRecording(rec)}
+        onLower={() => gameEngine.toggleEvpRecorder(false)}
+      />
+
+      {/* Evidence Log Modal (Polaroids & EVP Tapes) */}
+      <PolaroidAlbum
+        open={snapshot.albumOpen}
+        photos={snapshot.photos}
+        tapes={snapshot.tapes}
+        hasRecorder={snapshot.hasRecorder}
+        playingTapeId={snapshot.playingTapeId}
+        onClose={() => gameEngine.toggleAlbum(false)}
+        onOpenCamera={() => gameEngine.toggleCamera(true)}
+        onTogglePlayTape={(tapeId) => gameEngine.toggleTapePlayback(tapeId)}
+      />
 
       {/* End of Ride Summary Overlay (Milestone 3/6 arrival; expanded to full ReportScreen in Milestone 8) */}
       {snapshot.phase === 'end' && (

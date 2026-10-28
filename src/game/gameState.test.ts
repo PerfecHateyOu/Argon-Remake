@@ -305,6 +305,49 @@ test('gameEngine handles Stop 11 Restraint (hold steady vs fail), Newtown Creek 
   gameEngine.returnToMenu();
 });
 
+test('gameEngine handles Polaroid 600 anomaly capture, watched flash suspicion, EVP tuning/recording, and tape playback', () => {
+  gameEngine.startRide({ chapter: 2, nightmare: false });
+  assert.equal(gameEngine.getSnapshot().hasRecorder, true);
+  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 6);
+
+  // Spawn & manifest window_residue and snap a Polaroid while looking at it
+  gameEngine.spawnStretchAnomaly('window_residue', true);
+  gameEngine.syncPlayerPose(0, 0.85, 0, 0.1);
+  gameEngine.toggleCamera(true);
+  assert.equal(gameEngine.getSnapshot().cameraOpen, true);
+
+  const caughtByPhoto = gameEngine.snapPolaroidPhoto(null);
+  assert.equal(caughtByPhoto, true);
+  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 5);
+  assert.equal(gameEngine.getSnapshot().anomaliesCaughtCount, 1);
+  assert.equal(gameEngine.getSnapshot().photos.length, 1);
+  assert.equal(gameEngine.getSnapshot().photos[0]?.anomalyId, 'window_residue');
+  assert.equal(gameEngine.getSnapshot().photos[0]?.developed, false);
+
+  // Raise EVP recorder, tune to 98.20 MHz (The conductor), and hold record for 1.7s
+  gameEngine.toggleEvpRecorder(true);
+  assert.equal(gameEngine.getSnapshot().evpOpen, true);
+  assert.equal(gameEngine.getSnapshot().cameraOpen, false);
+  gameEngine.setEvpFrequency(98.2);
+  assert.equal(gameEngine.getSnapshot().evpLockedSignalId, 'conductor_echo');
+
+  gameEngine.setEvpRecording(true);
+  gameEngine.stepRide(1.7);
+  assert.equal(gameEngine.getSnapshot().tapes.length, 1);
+  assert.equal(gameEngine.getSnapshot().tapes[0]?.id, 'conductor_echo');
+  assert.equal(gameEngine.getSnapshot().hasConductorEvp, true);
+
+  // Finish ride at Court Sq -> Polaroids develop
+  gameEngine.enterSegment(12);
+  gameEngine.arriveAtCurrentStop();
+  gameEngine.chooseCourtSqExit('escalators');
+  assert.equal(gameEngine.getSnapshot().phase, 'end');
+  assert.equal(gameEngine.getSnapshot().photos[0]?.developed, true);
+
+  gameEngine.returnToMenu();
+});
+
+
 
 
 

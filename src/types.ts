@@ -212,6 +212,47 @@ export interface StopDecisionRecord {
   sanityBandMax: number;
 }
 
+export interface PolaroidPhotoRecord {
+  id: string;
+  stopNumber: number;
+  stationName: string;
+  carLocation: ConsistLocationLabel;
+  routeId: RouteLineId;
+  dataUrl: string;
+  anomalyId: AnomalyId | null;
+  anomalyTitle: string | null;
+  psychClass: PsychClass | null;
+  reportDescription: string | null;
+  developed: boolean;
+  capturedAtSec: number;
+}
+
+export type EvpSignalId =
+  | 'dispatch_track_2'
+  | 'a_passenger'
+  | 'dispatch_no_train'
+  | 'someone_far_end'
+  | 'static_then_time'
+  | 'conductor_echo'
+  | 'voice_like_moms'
+  | 's5_dispatch_static'
+  | 's4_phantom_pa'
+  | 's7_night_wiretap'
+  | 'emergency_channel'
+  | 'carrier_90_20'
+  | 'carrier_97_35'
+  | 'carrier_104_30';
+
+export interface EvpTapeRecord {
+  id: EvpSignalId;
+  frequencyMhz: number;
+  title: string;
+  transcript: string;
+  isCarrierOnly: boolean;
+  isSecretBroadcaster: boolean;
+  stopNumber: number;
+}
+
 export interface EngineSnapshot {
   phase: GamePhase;
   rideSubPhase: RideSubPhase;
@@ -252,7 +293,25 @@ export interface EngineSnapshot {
   anomaliesSpawnedCount: number;
   anomaliesCaughtCount: number;
   falseFlagsCount: number;
+  cameraOpen: boolean;
+  polaroidShotsRemaining: number;
+  polaroidFlashIntensity: number;
+  photos: PolaroidPhotoRecord[];
+  albumOpen: boolean;
   hasRecorder: boolean;
+  evpOpen: boolean;
+  evpFrequencyMhz: number;
+  evpSignalStrength: number;
+  evpLockedSignalId: EvpSignalId | null;
+  evpLockedTitle: string | null;
+  evpTranscriptLive: string | null;
+  evpIsRecording: boolean;
+  evpRecordProgress: number;
+  evpLastSavedTitle: string | null;
+  tapes: EvpTapeRecord[];
+  playingTapeId: EvpSignalId | null;
+  hasConductorEvp: boolean;
+  hasSecretBroadcasterEvp: boolean;
   safeHavenVisited: boolean;
   trialState: TrialState | null;
   falseStopTrials: FalseStopTrialRecord[];
@@ -277,6 +336,7 @@ export interface EngineSnapshot {
   playerYaw: number;
   playerPitch: number;
 }
+
 
 
 
