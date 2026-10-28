@@ -105,6 +105,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
             <button
               type="button"
+              data-testid="settings-button"
               onClick={onOpenSettings}
               className="px-5 py-3.5 border border-[#e6e2d8]/30 bg-[#0d100d] text-[#e6e2d8] text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
@@ -113,6 +114,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
             <button
               type="button"
+              data-testid="case-files-button"
               onClick={onOpenCaseFiles}
               className="px-5 py-3.5 border border-[#e6e2d8]/30 bg-[#0d100d] text-[#e6e2d8] text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >

@@ -28,11 +28,14 @@ import { isNearGangwayDoor, playerController, resolveConsistLocation } from '../
 import { pointerLock } from '../input/pointerLock';
 import { settingsStore } from '../settings';
 import type {
+  ActiveAnomalyInstance,
+  AnomalyId,
   ChapterStartOption,
   DoorTellType,
   EngineSnapshot,
   ExitChoiceId,
   GamePhase,
+  RideAnomalyRecord,
   RideSubPhase,
   RollsignBanner,
   RouteLineId,
@@ -40,6 +43,13 @@ import type {
   SegmentRule,
   SubtitleItem,
 } from '../types';
+import {
+  buildActiveAnomalyInstance,
+  isLookingAtAnomaly,
+  selectAnomalyIdForStretch,
+  shouldAnomalyManifest,
+  stepFlagHoldProgress,
+} from './anomalyManager';
 import {
   buildActiveMaskCheck,
   DAD_UNASKED_ANSWERS,
@@ -160,8 +170,13 @@ class GameEngine {
   private chatPart2Played = false;
   private maskChecksTriggeredInSegment = 0;
   private usedMaskCheckIds = new Set<string>();
+  private usedAnomalyIds = new Set<AnomalyId>();
+  private staringAtAnomalySec = 0;
+  private stareReactionCooldownSec = 0;
+  private falseFlagCooldownSec = 0;
 
   private passingTrainListeners = new Set<() => void>();
+  private tier3TearListeners = new Set<() => void>();
 
   constructor() {
     const settings = settingsStore.get();
@@ -200,6 +215,13 @@ class GameEngine {
       paranoidFlashText: null,
       interventionsCount: 0,
       lastReactionReason: null,
+      activeAnomaly: null,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
+      rideAnomalies: [],
+      anomaliesSpawnedCount: 0,
+      anomaliesCaughtCount: 0,
+      falseFlagsCount: 0,
       sanity: 100,
       sanityTier: 'High',
       suspicion: 0,
@@ -281,6 +303,13 @@ class GameEngine {
     this.passingTrainListeners.add(cb);
     return () => {
       this.passingTrainListeners.delete(cb);
+    };
+  }
+
+  public onTier3Tear(cb: () => void): () => void {
+    this.tier3TearListeners.add(cb);
+    return () => {
+      this.tier3TearListeners.delete(cb);
     };
   }
 
@@ -530,6 +559,155 @@ class GameEngine {
     this.update({ phase, paused: false });
   }
 
+  /**
+   * Spawns an unmanifested (or force-manifested) anomaly for the current stretch.
+   */
+  public spawnStretchAnomaly(
+    overrideId?: AnomalyId,
+    forceManifest = false
+  ): ActiveAnomalyInstance | null {
+    const seg = this.getCurrentSegmentRule();
+    const chosenId =
+      overrideId ??
+      selectAnomalyIdForStretch({
+        segmentRule: seg,
+        sanityTier: this.snapshot.sanityTier,
+        alreadyUsedIds: Array.from(this.usedAnomalyIds),
+      });
+
+    if (!chosenId) {
+      this.update({ activeAnomaly: null });
+      return null;
+    }
+
+    this.usedAnomalyIds.add(chosenId);
+    const instance = buildActiveAnomalyInstance(chosenId);
+    this.staringAtAnomalySec = 0;
+
+    if (forceManifest) {
+      this.update({ activeAnomaly: instance });
+      return this.manifestActiveAnomaly();
+    }
+
+    this.update({ activeAnomaly: instance });
+    return instance;
+  }
+
+  /**
+   * Manifests the currently scheduled anomaly in the 3D scene and records it as witnessed.
+   */
+  public manifestActiveAnomaly(): ActiveAnomalyInstance | null {
+    const current = this.snapshot.activeAnomaly;
+    if (!current || current.manifested) return current;
+
+    const seg = this.getCurrentSegmentRule();
+    const manifested: ActiveAnomalyInstance = {
+      ...current,
+      manifested: true,
+    };
+
+    const nextRecord: RideAnomalyRecord = {
+      id: manifested.id,
+      title: manifested.title,
+      psychClass: manifested.psychClass,
+      stopNumber: seg.stopNumber,
+      segmentId: seg.id,
+      reportDescription: manifested.reportDescription,
+      caught: false,
+    };
+
+    const nextRideAnomalies = [...this.snapshot.rideAnomalies, nextRecord];
+
+    if (!this.snapshot.isPracticeRun && !this.snapshot.isDebugRun) {
+      const archive = settingsStore.getArchive();
+      if (
+        !archive.documentedAnomalies.includes(manifested.id) &&
+        !archive.unconfirmedAnomalies.includes(manifested.id)
+      ) {
+        settingsStore.updateArchive({
+          unconfirmedAnomalies: [...archive.unconfirmedAnomalies, manifested.id],
+        });
+      }
+    }
+
+    this.update({
+      activeAnomaly: manifested,
+      anomaliesSpawnedCount: this.snapshot.anomaliesSpawnedCount + 1,
+      rideAnomalies: nextRideAnomalies,
+    });
+
+    if (manifested.id === 'dad_answering' && manifested.dadLine) {
+      this.showSubtitle(
+        {
+          speaker: 'Dad',
+          text: manifested.dadLine,
+        },
+        3.8
+      );
+    }
+
+    if (manifested.tierIndex === 3) {
+      for (const cb of this.tier3TearListeners) cb();
+      this.triggerParanoidFlash('LOOK AWAY');
+    }
+
+    return manifested;
+  }
+
+  /**
+   * Catches the currently manifested anomaly (via 0.7 s Flag hold or Polaroid photo).
+   * Flagging is private and NEVER raises parent suspicion.
+   */
+  public catchActiveAnomaly(caughtByPhoto = false): boolean {
+    const current = this.snapshot.activeAnomaly;
+    if (!current || !current.manifested || current.caught) return false;
+
+    const caughtInstance: ActiveAnomalyInstance = {
+      ...current,
+      caught: true,
+    };
+
+    const updatedRideAnomalies = this.snapshot.rideAnomalies.map((rec, idx, arr) =>
+      idx === arr.length - 1 && rec.id === current.id
+        ? { ...rec, caught: true, caughtByPhoto }
+        : rec
+    );
+
+    if (!this.snapshot.isPracticeRun && !this.snapshot.isDebugRun) {
+      const archive = settingsStore.getArchive();
+      const nextDoc = archive.documentedAnomalies.includes(current.id)
+        ? archive.documentedAnomalies
+        : [...archive.documentedAnomalies, current.id];
+      const nextUnconf = archive.unconfirmedAnomalies.filter((id) => id !== current.id);
+      settingsStore.updateArchive({
+        documentedAnomalies: nextDoc,
+        unconfirmedAnomalies: nextUnconf,
+      });
+    }
+
+    this.update({
+      activeAnomaly: caughtInstance,
+      anomaliesCaughtCount: this.snapshot.anomaliesCaughtCount + 1,
+      rideAnomalies: updatedRideAnomalies,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
+      sanity: this.snapshot.sanity + SANITY_DELTAS.CATCH,
+    });
+
+    return true;
+  }
+
+  /**
+   * Sets whether the player is holding the Flag key (F) or on-screen FLAG button.
+   */
+  public setFlagHolding(holding: boolean): void {
+    if (this.snapshot.isFlagHolding === holding) return;
+    this.update({
+      isFlagHolding: holding,
+      flagHoldProgress: holding ? this.snapshot.flagHoldProgress : 0,
+    });
+  }
+
   public startRide(options?: {
     chapter?: ChapterStartOption;
     nightmare?: boolean;
@@ -542,6 +720,7 @@ class GameEngine {
     const seg = SEGMENT_TABLE[initialSegmentTableIndex] ?? SEGMENT_TABLE[0]!;
     const originStationIdx = Math.max(0, seg.stationIndex - 1);
     const initialSanity = clampSanityForStop(100, seg.stopNumber);
+    const initialTier = computeSanityTier(initialSanity);
 
     this.frameTimeAccumMs = 0;
     this.frameSampleCount = 0;
@@ -555,6 +734,10 @@ class GameEngine {
     this.chatPart2Played = false;
     this.maskChecksTriggeredInSegment = 0;
     this.usedMaskCheckIds.clear();
+    this.usedAnomalyIds.clear();
+    this.staringAtAnomalySec = 0;
+    this.stareReactionCooldownSec = 0;
+    this.falseFlagCooldownSec = 0;
 
     playerController.resetToSeat();
     pointerLock.clearErrorHint();
@@ -566,6 +749,14 @@ class GameEngine {
     const rollsign = getChapterRollsign(chapter, 'G');
     this.rollsignRemainingSec = ROLLSIGN_DISPLAY_SEC;
     this.subtitleRemainingSec = 4.5;
+
+    const firstAnomalyId = selectAnomalyIdForStretch({
+      segmentRule: seg,
+      sanityTier: initialTier,
+    });
+    if (firstAnomalyId) {
+      this.usedAnomalyIds.add(firstAnomalyId);
+    }
 
     this.snapshot = {
       ...this.snapshot,
@@ -603,8 +794,15 @@ class GameEngine {
       paranoidFlashText: null,
       interventionsCount: 0,
       lastReactionReason: null,
+      activeAnomaly: firstAnomalyId ? buildActiveAnomalyInstance(firstAnomalyId) : null,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
+      rideAnomalies: [],
+      anomaliesSpawnedCount: 0,
+      anomaliesCaughtCount: 0,
+      falseFlagsCount: 0,
       sanity: initialSanity,
-      sanityTier: computeSanityTier(initialSanity),
+      sanityTier: initialTier,
       suspicion: 0,
       peakSuspicion: 0,
       isPracticeRun: isPractice,
@@ -649,6 +847,7 @@ class GameEngine {
     this.chatPart1Played = false;
     this.chatPart2Played = false;
     this.maskChecksTriggeredInSegment = 0;
+    this.staringAtAnomalySec = 0;
 
     let nextRollsign = this.snapshot.rollsign;
     if (seg.id === '6') {
@@ -666,6 +865,16 @@ class GameEngine {
         ? this.snapshot.sanity + SANITY_DELTAS.DRIFT_ON_CEILING_DROP
         : this.snapshot.sanity;
     const nextSanity = clampSanityForStop(driftedSanity, seg.stopNumber);
+    const nextTier = computeSanityTier(nextSanity);
+
+    const nextAnomalyId = selectAnomalyIdForStretch({
+      segmentRule: seg,
+      sanityTier: nextTier,
+      alreadyUsedIds: Array.from(this.usedAnomalyIds),
+    });
+    if (nextAnomalyId) {
+      this.usedAnomalyIds.add(nextAnomalyId);
+    }
 
     this.update({
       phase: 'ride',
@@ -687,6 +896,9 @@ class GameEngine {
       rollsign: nextRollsign,
       watchingParentLabel: null,
       activeMaskCheck: null,
+      activeAnomaly: nextAnomalyId ? buildActiveAnomalyInstance(nextAnomalyId) : null,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
       sanity: nextSanity,
     });
 
@@ -710,6 +922,13 @@ class GameEngine {
 
     this.stopElapsedSec = 0;
 
+    // If an anomaly manifested on this stretch and was NOT caught, apply SANITY_DELTAS.MISS (-5)
+    const missedActiveAnomaly =
+      this.snapshot.activeAnomaly?.manifested && !this.snapshot.activeAnomaly.caught;
+    const nextSanity = missedActiveAnomaly
+      ? this.snapshot.sanity + SANITY_DELTAS.MISS
+      : this.snapshot.sanity;
+
     this.update({
       phase: 'stop',
       rideSubPhase: 'chime',
@@ -726,6 +945,10 @@ class GameEngine {
       lightFlickerIntensity: 1.0,
       activeMaskCheck: null,
       watchingParentLabel: null,
+      activeAnomaly: null,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
+      sanity: nextSanity,
     });
 
     if (!seg.silent) {
@@ -757,6 +980,12 @@ class GameEngine {
 
     if (this.headWhipCooldownSec > 0) {
       this.headWhipCooldownSec = Math.max(0, this.headWhipCooldownSec - dtSec);
+    }
+    if (this.stareReactionCooldownSec > 0) {
+      this.stareReactionCooldownSec = Math.max(0, this.stareReactionCooldownSec - dtSec);
+    }
+    if (this.falseFlagCooldownSec > 0) {
+      this.falseFlagCooldownSec = Math.max(0, this.falseFlagCooldownSec - dtSec);
     }
 
     // 1. Decay active rollsign, subtitle & paranoid flash timers
@@ -808,7 +1037,7 @@ class GameEngine {
       TRAIN_CRUISE_SPEED_MPS *
       (this.snapshot.nightmareMode ? TRAIN_NIGHTMARE_SPEED_MULT : 1.0);
 
-    // 3. In-transit ride motion & parent watching / chats / mask checks
+    // 3. In-transit ride motion & parent watching / chats / mask checks / anomalies
     if (this.snapshot.phase === 'ride') {
       const nextElapsed = this.snapshot.segmentElapsedSec + dtSec;
       const totalDur = this.snapshot.segmentDurationSec;
@@ -935,6 +1164,82 @@ class GameEngine {
         }
       } else {
         nextWatcher = null;
+      }
+
+      // Step Anomaly Manifestation, Staring-while-watched, and 0.7s Flag Hold
+      const camY = playerController.getState().y || 1.24;
+      const currentAnomaly = this.snapshot.activeAnomaly;
+
+      if (currentAnomaly && !currentAnomaly.manifested && nextElapsed >= 1.5) {
+        const canManifest = shouldAnomalyManifest({
+          anomaly: currentAnomaly,
+          cameraX: this.snapshot.playerX,
+          cameraY: camY,
+          cameraZ: this.snapshot.playerZ,
+          yaw: this.snapshot.playerYaw,
+          pitch: this.snapshot.playerPitch,
+          stretchElapsedSec: nextElapsed,
+          stretchDurationSec: totalDur,
+        });
+        if (canManifest) {
+          this.manifestActiveAnomaly();
+          bannerChanged = true;
+        }
+      }
+
+      const lookingAtActive = isLookingAtAnomaly(
+        this.snapshot.activeAnomaly,
+        this.snapshot.playerX,
+        camY,
+        this.snapshot.playerZ,
+        this.snapshot.playerYaw,
+        this.snapshot.playerPitch
+      );
+
+      // Staring at something wrong while a parent is watching raises suspicion
+      if (lookingAtActive && nextWatcher !== null) {
+        this.staringAtAnomalySec += dtSec;
+        if (this.staringAtAnomalySec >= 1.35 && this.stareReactionCooldownSec <= 0) {
+          this.staringAtAnomalySec = 0;
+          this.stareReactionCooldownSec = 3.5;
+          this.recordVisibleReaction(
+            `Stared at something wrong while ${nextWatcher} was watching`
+          );
+          bannerChanged = true;
+        }
+      } else {
+        this.staringAtAnomalySec = Math.max(0, this.staringAtAnomalySec - dtSec * 2.0);
+      }
+
+      // Step 0.7 s Flag hold
+      if (this.snapshot.isFlagHolding || this.snapshot.flagHoldProgress > 0) {
+        const flagStep = stepFlagHoldProgress({
+          isHolding: this.snapshot.isFlagHolding,
+          currentProgress: this.snapshot.flagHoldProgress,
+          dtSec,
+          lookingAtActiveAnomaly: lookingAtActive,
+        });
+
+        const prevBucket = Math.round(this.snapshot.flagHoldProgress * 20);
+        const nextBucket = Math.round(flagStep.nextProgress * 20);
+        this.snapshot.flagHoldProgress = Number(flagStep.nextProgress.toFixed(2));
+        if (prevBucket !== nextBucket) {
+          bannerChanged = true;
+        }
+
+        if (flagStep.completedCatch) {
+          this.catchActiveAnomaly(false);
+          bannerChanged = true;
+        } else if (flagStep.completedFalseFlag && this.falseFlagCooldownSec <= 0) {
+          this.falseFlagCooldownSec = 2.5;
+          this.update({
+            isFlagHolding: false,
+            flagHoldProgress: 0,
+            falseFlagsCount: this.snapshot.falseFlagsCount + 1,
+            sanity: this.snapshot.sanity + SANITY_DELTAS.FALSE_FLAG,
+          });
+          bannerChanged = true;
+        }
       }
 
       const nextFlicker = computeArrivalFlickerIntensity(timeRemaining, seg.doorTell);
@@ -1140,6 +1445,13 @@ class GameEngine {
       paranoidFlashText: null,
       interventionsCount: 0,
       lastReactionReason: null,
+      activeAnomaly: null,
+      flagHoldProgress: 0,
+      isFlagHolding: false,
+      rideAnomalies: [],
+      anomaliesSpawnedCount: 0,
+      anomaliesCaughtCount: 0,
+      falseFlagsCount: 0,
       sanity: 100,
       suspicion: 0,
       peakSuspicion: 0,

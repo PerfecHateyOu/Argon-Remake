@@ -332,3 +332,64 @@ export function createStationTileWallTexture(
   return tex;
 }
 
+export function createWindowResidueTexture(
+  variant: 'sticker' | 'stain',
+  maxAnisotropy = 4
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return finalizeCanvasTexture(canvas, maxAnisotropy);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (variant === 'sticker') {
+    // Bright yellow smiley sticker with slightly peeling edge
+    ctx.beginPath();
+    ctx.arc(128, 128, 86, 0, Math.PI * 2);
+    ctx.fillStyle = '#f7d926';
+    ctx.fill();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#181814';
+    ctx.stroke();
+
+    // Eyes
+    ctx.fillStyle = '#181814';
+    ctx.beginPath();
+    ctx.ellipse(98, 102, 10, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(158, 102, 10, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Uncanny wide smile arc
+    ctx.beginPath();
+    ctx.arc(128, 132, 52, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = '#181814';
+    ctx.stroke();
+  } else {
+    // Grimy dark liquid drip stain running down the glass
+    ctx.fillStyle = 'rgba(28, 36, 26, 0.85)';
+    ctx.beginPath();
+    ctx.ellipse(128, 56, 54, 24, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const drips: ReadonlyArray<{ x: number; w: number; h: number }> = [
+      { x: 92, w: 12, h: 140 },
+      { x: 118, w: 16, h: 182 },
+      { x: 144, w: 10, h: 155 },
+      { x: 164, w: 8, h: 112 },
+    ];
+    for (const d of drips) {
+      ctx.fillStyle = 'rgba(22, 29, 20, 0.88)';
+      ctx.fillRect(d.x - d.w / 2, 56, d.w, d.h);
+      ctx.beginPath();
+      ctx.arc(d.x, 56 + d.h, d.w * 0.65, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  return finalizeCanvasTexture(canvas, maxAnisotropy);
+}
+
+

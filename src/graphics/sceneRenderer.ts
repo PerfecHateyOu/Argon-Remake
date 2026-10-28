@@ -179,7 +179,11 @@ export class SceneRenderer {
     }
   }
 
-  private updateLightPoolPositions(playerX: number, flickerMult: number): void {
+  private updateLightPoolPositions(
+    playerX: number,
+    flickerMult: number,
+    coldPanelActive = false
+  ): void {
     let centerAnchorX: number = CAR_CENTERS_X.B;
     if (playerX < -10.0) {
       centerAnchorX = CAR_CENTERS_X.A;
@@ -195,6 +199,11 @@ export class SceneRenderer {
       if (light) {
         light.position.x = centerAnchorX + offset;
         light.intensity = targetIntensity;
+        if (coldPanelActive && centerAnchorX === CAR_CENTERS_X.B && i === 1) {
+          light.color.setHex(0x6ec6ff);
+        } else {
+          light.color.setHex(FLUORESCENT_LIGHT_COLOR);
+        }
       }
     }
   }
@@ -214,6 +223,9 @@ export class SceneRenderer {
         crowd: segRule.crowd,
       });
     }
+
+    this.consistRig.applyCarAnomaly(snap.activeAnomaly, snap.activeRoute);
+    this.charactersRig.applyCharacterAnomaly(snap.activeAnomaly);
 
     const targetStationName =
       snap.phase === 'stop' || snap.rideSubPhase === 'departing'
@@ -300,7 +312,7 @@ export class SceneRenderer {
         this.tunnelRig.step(clampedDtSec, 8.0, 200, false);
         this.consistRig.updateSideDoors(0);
         this.consistRig.setCeilingLightIntensity(1.0);
-        this.updateLightPoolPositions(PLAYER_SEAT_X, 1.0);
+        this.updateLightPoolPositions(PLAYER_SEAT_X, 1.0, false);
         this.charactersRig.step(clampedDtSec, this.elapsedSec, PLAYER_SEAT_X, PLAYER_SEAT_Z, null);
       } else {
         const kin = playerController.step(clampedDtSec, snap.phase);
@@ -320,10 +332,16 @@ export class SceneRenderer {
         _euler.set(kin.pitch, kin.yaw, railSwayRoll, 'YXZ');
         this.camera.quaternion.setFromEuler(_euler);
 
+        const coldPanelActive = Boolean(
+          snap.activeAnomaly?.manifested &&
+            !snap.activeAnomaly.caught &&
+            snap.activeAnomaly.id === 'cold_panel'
+        );
+
         this.consistRig.updateGangwayDoors(kin.x, clampedDtSec);
         this.consistRig.updateSideDoors(snap.doorOpenProgress, 'platform');
         this.consistRig.setCeilingLightIntensity(snap.lightFlickerIntensity);
-        this.updateLightPoolPositions(kin.x, snap.lightFlickerIntensity);
+        this.updateLightPoolPositions(kin.x, snap.lightFlickerIntensity, coldPanelActive);
 
         this.tunnelRig.step(
           clampedDtSec,

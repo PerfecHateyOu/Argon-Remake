@@ -107,6 +107,7 @@ export const SUSPICION_DELTAS = {
 export const SANITY_DELTAS = {
   DRIFT_ON_CEILING_DROP: -5,
   CLOCK: -2,
+  CATCH: 2,
   MISS: -5,
   FALSE_FLAG: -3,
   MASK_FAIL: -4,
@@ -121,6 +122,12 @@ export const SANITY_DELTAS = {
 export const RESTRAINT_CEILING_RAISE = 6;
 export const RESTRAINT_GRACE_SECONDS = 2.5;
 export const FLAG_HOLD_SECONDS = 0.7;
+export const FLAG_HOLD_DURATION_SEC = 0.7;
+
+export const ANOMALY_GAZE_THRESHOLD_INITIAL_RAD = 0.7;
+export const ANOMALY_GAZE_THRESHOLD_8S_RAD = 0.35;
+export const ANOMALY_GAZE_THRESHOLD_FINAL_3S_RAD = 0.2;
+export const ANOMALY_CLOSE_UP_MAX_DIST_M = 5.0;
 
 // Sanity bands by stop number (1..13)
 export const SANITY_BANDS_BY_STOP: Record<number, readonly [number, number]> = {

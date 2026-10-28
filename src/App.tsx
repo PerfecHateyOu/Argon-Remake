@@ -6,6 +6,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StartScreen } from './components/StartScreen';
 import { ROUTE_METADATA } from './constants';
 import { gameEngine } from './game/gameState';
+import { PSYCH_IDS, resolvePsychLogCatalog } from './game/psychLog';
 import { SceneRenderer } from './graphics/sceneRenderer';
 import { playerController } from './input/keyLook';
 import { pointerLock, type PointerLockState } from './input/pointerLock';
@@ -59,7 +60,7 @@ export default function App() {
     };
   }, []);
 
-  // Global keyboard shortcuts (P/Esc pause, M mute, L route selector, E step off at stop, 1/2/3 mask check, ` debug overlay)
+  // Global keyboard shortcuts (P/Esc pause, M mute, L route selector, E step off at stop, F flag hold, 1/2/3 mask check, ` debug overlay)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (settingsOpen || caseFilesOpen || routeSelectorOpen) {
@@ -73,6 +74,16 @@ export default function App() {
 
       if (e.key === '`') {
         settingsStore.update({ debugOverlay: !settingsStore.get().debugOverlay });
+        return;
+      }
+
+      if (
+        (e.key === 'f' || e.key === 'F' || e.code === 'KeyF') &&
+        snapshot.phase === 'ride' &&
+        !snapshot.paused
+      ) {
+        e.preventDefault();
+        gameEngine.setFlagHolding(true);
         return;
       }
 
@@ -121,8 +132,24 @@ export default function App() {
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'f' || e.key === 'F' || e.code === 'KeyF') {
+        gameEngine.setFlagHolding(false);
+      }
+    };
+
+    const handleBlur = () => {
+      gameEngine.setFlagHolding(false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
   }, [
     settingsOpen,
     caseFilesOpen,
@@ -289,7 +316,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Center Prompts: Gangway Door & Pointer Lock Capture Hint */}
+          {/* Center Prompts: Gangway Door, Flag Hold Progress & Pointer Lock Capture Hint */}
           <div className="flex flex-col items-center gap-3 my-auto">
             {snapshot.nearGangwayDoor && (
               <div
@@ -297,6 +324,24 @@ export default function App() {
                 className="border border-[#ffcf8a]/40 bg-[#080a08]/90 px-3.5 py-1 text-xs font-mono tracking-wider text-[#ffcf8a]"
               >
                 PUSH GANGWAY DOOR · GANGWAY COUPLING
+              </div>
+            )}
+
+            {snapshot.flagHoldProgress > 0 && (
+              <div
+                data-testid="flag-hold-indicator"
+                className="border border-[#ffcf8a]/60 bg-[#080a08]/92 px-4 py-1.5 space-y-1 min-w-44"
+              >
+                <div className="flex items-center justify-between gap-4 text-[11px] font-mono uppercase tracking-wider text-[#ffcf8a]">
+                  <span>Flag: hold to catch</span>
+                  <span>{Math.round(snapshot.flagHoldProgress * 100)}%</span>
+                </div>
+                <div className="w-full h-1.5 bg-[#e6e2d8]/15 overflow-hidden">
+                  <div
+                    className="h-full bg-[#ffcf8a]"
+                    style={{ width: `${Math.round(snapshot.flagHoldProgress * 100)}%` }}
+                  />
+                </div>
               </div>
             )}
 
@@ -312,7 +357,7 @@ export default function App() {
             )}
           </div>
 
-          {/* Bottom Controls: WALK Stick, Mask Check Prompt, Station Stop Decision, Subtitles, Debug Overlay, and Hint Strip */}
+          {/* Bottom Controls: WALK Stick, Mask Check Prompt, Station Stop Decision, Subtitles, Debug Overlay, Hint Strip, and FLAG Button */}
           <div className="flex items-end justify-between gap-4">
             <MoveStick onMove={(x, y) => playerController.setMoveStickInput(x, y)} />
 
@@ -459,9 +504,18 @@ export default function App() {
                   className="border border-[#ffcf8a]/40 bg-[#080a08]/95 px-3 py-1.5 text-[11px] font-mono tabular-nums text-[#ffcf8a]"
                 >
                   DEBUG RUN (NO SAVE) · Seg {snapshot.segmentId} ({snapshot.rideSubPhase}) · Tell:{' '}
-                  {snapshot.activeDoorTell} · Speed: {snapshot.trainSpeedMps}m/s ·{' '}
-                  {snapshot.carLocation} · Pos: ({snapshot.playerX}, {snapshot.playerZ}) · Sanity:{' '}
-                  {snapshot.sanity} ({snapshot.sanityTier}) · Susp: {snapshot.suspicion} (
+                  {snapshot.activeDoorTell} · Anom:{' '}
+                  {snapshot.activeAnomaly
+                    ? `${snapshot.activeAnomaly.id} (${
+                        snapshot.activeAnomaly.caught
+                          ? 'caught'
+                          : snapshot.activeAnomaly.manifested
+                            ? 'manifested'
+                            : 'waiting'
+                      })`
+                    : 'none'}{' '}
+                  · Caught: {snapshot.anomaliesCaughtCount}/{snapshot.anomaliesSpawnedCount} ·
+                  Sanity: {snapshot.sanity} ({snapshot.sanityTier}) · Susp: {snapshot.suspicion} (
                   {snapshot.watchingParentLabel ?? 'none'})
                 </div>
               )}
@@ -474,7 +528,26 @@ export default function App() {
               )}
             </div>
 
-            <div className="w-20 shrink-0" />
+            {/* On-screen FLAG button (touch & mouse accessible, holds for 0.7 s) */}
+            <div className="flex flex-col items-end gap-1 shrink-0 pointer-events-auto">
+              <button
+                type="button"
+                tabIndex={-1}
+                data-testid="flag-button"
+                aria-label="Flag: hold to catch"
+                onPointerDown={() => gameEngine.setFlagHolding(true)}
+                onPointerUp={() => gameEngine.setFlagHolding(false)}
+                onPointerLeave={() => gameEngine.setFlagHolding(false)}
+                onPointerCancel={() => gameEngine.setFlagHolding(false)}
+                className="relative overflow-hidden px-3.5 py-2.5 border border-[#e6e2d8]/30 bg-[#080a08]/92 text-xs font-mono uppercase tracking-wider text-[#fff0d4] hover:border-[#ffcf8a] cursor-pointer select-none whitespace-nowrap"
+              >
+                <span
+                  className="absolute inset-y-0 left-0 bg-[#ffcf8a]/25 pointer-events-none"
+                  style={{ width: `${Math.round(snapshot.flagHoldProgress * 100)}%` }}
+                />
+                <span className="relative z-10">Flag (F) · hold to catch</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -500,8 +573,14 @@ export default function App() {
             )}
             <div className="border-t border-[#e6e2d8]/15 pt-3 text-xs font-mono text-[#9e9a90] space-y-1">
               <div>Route Line: {currentRoute.name}</div>
-              <div>Final Sanity: {snapshot.sanity} ({snapshot.sanityTier})</div>
+              <div>
+                Final Sanity: {snapshot.sanity} ({snapshot.sanityTier})
+              </div>
               <div>Peak Suspicion: {snapshot.peakSuspicion}</div>
+              <div>
+                Anomalies Caught: {snapshot.anomaliesCaughtCount} of{' '}
+                {snapshot.anomaliesSpawnedCount}
+              </div>
             </div>
             <div className="flex items-center gap-3 pt-2">
               <button
@@ -561,6 +640,13 @@ export default function App() {
               </button>
               <button
                 type="button"
+                onClick={() => setCaseFilesOpen(true)}
+                className="w-full py-2.5 border border-[#e6e2d8]/30 text-sm text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
+              >
+                Case Files
+              </button>
+              <button
+                type="button"
                 onClick={() => setSettingsOpen(true)}
                 className="w-full py-2.5 border border-[#e6e2d8]/30 text-sm text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
               >
@@ -590,31 +676,103 @@ export default function App() {
         />
       )}
 
-      {/* Case Files Modal */}
-      {caseFilesOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Case Files"
-          className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-[#040504]/85 pointer-events-auto"
-        >
-          <div className="w-full max-w-xl border border-[#e6e2d8]/25 bg-[#0b0d0b] p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#e6e2d8]/15 pb-3">
-              <h2 className="text-lg font-semibold text-[#fff0d4]">Case Files</h2>
-              <button
-                type="button"
-                onClick={() => setCaseFilesOpen(false)}
-                className="px-3 py-1 border border-[#e6e2d8]/30 text-xs text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
-              >
-                Close Case Files
-              </button>
+      {/* Case Files Modal (Psych Log Anomalies Catalog) */}
+      {caseFilesOpen &&
+        (() => {
+          const psychCatalog = resolvePsychLogCatalog(archive, snapshot.rideAnomalies);
+          const hasAnyWitnessed =
+            psychCatalog.documentedCount > 0 || psychCatalog.unconfirmedCount > 0;
+          return (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Case Files"
+              data-testid="case-files-modal"
+              className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-[#040504]/90 pointer-events-auto"
+            >
+              <div className="w-full max-w-2xl max-h-[85vh] flex flex-col border border-[#e6e2d8]/25 bg-[#0b0d0b] p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-[#e6e2d8]/15 pb-3 shrink-0">
+                  <div>
+                    <h2 className="text-lg font-semibold text-[#fff0d4]">Case Files</h2>
+                    <div className="text-xs font-mono text-[#ffcf8a]">
+                      {psychCatalog.documentedCount} of {PSYCH_IDS.length} documented,{' '}
+                      {psychCatalog.unconfirmedCount} unconfirmed
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="close-case-files-button"
+                    onClick={() => setCaseFilesOpen(false)}
+                    className="px-3 py-1.5 border border-[#e6e2d8]/30 text-xs text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
+                  >
+                    Close Case Files
+                  </button>
+                </div>
+
+                {!hasAnyWitnessed && (
+                  <p className="text-sm text-[#c8c3b8]">
+                    Nothing witnessed yet. Anomalies you see on a ride are filed here.
+                  </p>
+                )}
+
+                <div className="overflow-y-auto space-y-2.5 pr-1">
+                  {psychCatalog.entries.map((entry) => {
+                    const { definition, status } = entry;
+                    const isDoc = status === 'DOCUMENTED';
+                    const isUnconf = status === 'UNCONFIRMED';
+                    return (
+                      <div
+                        key={definition.id}
+                        data-testid={`psych-entry-${definition.id}`}
+                        className="border border-[#e6e2d8]/15 bg-[#080a08] p-3.5 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs font-semibold text-[#fff0d4]">
+                            {isDoc || isUnconf ? (
+                              <>
+                                #{definition.index} · {definition.title}{' '}
+                                <span className="font-mono text-[#9e9a90]">
+                                  (Class {definition.psychClass})
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[#9e9a90]">
+                                #{definition.index} · Class {definition.psychClass}, not yet
+                                witnessed
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider border ${
+                              isDoc
+                                ? 'border-[#ffcf8a]/60 text-[#ffcf8a] bg-[#ffcf8a]/10'
+                                : isUnconf
+                                  ? 'border-[#e6e2d8]/30 text-[#c8c3b8]'
+                                  : 'border-[#e6e2d8]/15 text-[#78746c]'
+                            }`}
+                          >
+                            {status}
+                          </span>
+                        </div>
+
+                        {isDoc && (
+                          <p className="text-xs text-[#c8c3b8] leading-relaxed">
+                            {definition.caseFileNote}
+                          </p>
+                        )}
+                        {isUnconf && (
+                          <p className="text-xs italic text-[#9e9a90]">
+                            Seen, not flagged in time.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <p className="text-sm text-[#c8c3b8]">
-              Nothing witnessed yet. Anomalies you see on a ride are filed here.
-            </p>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       {/* Settings Panel Modal */}
       {settingsOpen && (

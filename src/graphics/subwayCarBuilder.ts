@@ -18,10 +18,11 @@ import {
   createCarNumberPlateTexture,
   createRouteMapTexture,
   createSpeckledFloorTexture,
+  createWindowResidueTexture,
 } from './textureGenerator';
 
 import { ROUTE_METADATA } from '../constants';
-import type { RouteLineId } from '../types';
+import type { ActiveAnomalyInstance, RouteLineId } from '../types';
 
 export interface GangwayDoorRig {
   centerX: number;
@@ -49,7 +50,12 @@ export interface SubwayConsistRig {
   routeMapMeshes: THREE.Mesh[];
   updateGangwayDoors: (playerX: number, dtSec: number) => void;
   updateSideDoors: (openProgress: number, side?: 'platform' | 'both') => void;
-  updateRouteMaps: (route: RouteLineId, hollowStAnomaly?: boolean) => void;
+  updateRouteMaps: (
+    route: RouteLineId,
+    hollowStAnomaly?: boolean,
+    overrideBulletColor?: string
+  ) => void;
+  applyCarAnomaly: (anomaly: ActiveAnomalyInstance | null, route: RouteLineId) => void;
   setCeilingLightIntensity: (multiplier: number) => void;
   dispose: () => void;
 }
@@ -446,8 +452,10 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
         adMesh.position.set(ax, 2.15, -(halfW - 0.075));
         adMesh.userData = {
           carId: carDef.id,
+          slotIndex: idx,
           adId: acrossEntry.ad.id,
           placement: 'across',
+          baseMaterial: acrossEntry.mat,
         };
         carGroup.add(adMesh);
         adMeshes.push(adMesh);
@@ -460,17 +468,20 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
         nearMesh.rotation.y = Math.PI;
         nearMesh.userData = {
           carId: carDef.id,
+          slotIndex: idx,
           adId: nearEntry.ad.id,
           placement: 'near',
+          baseMaterial: nearEntry.mat,
         };
         carGroup.add(nearMesh);
         adMeshes.push(nearMesh);
       }
     });
 
-    // Route maps above side doors
+    // Route maps above side doors (plus a central strip map at x = -1.6 across from player seat)
     for (const sideSign of [-1, 1] as const) {
-      for (const mapX of [-5.0, 5.0]) {
+      const mapXs = sideSign === -1 ? [-5.0, -1.6, 5.0] : [-5.0, 5.0];
+      for (const mapX of mapXs) {
         const mapMesh = new THREE.Mesh(routeMapPlaneGeo, routeMapMat);
         mapMesh.position.set(mapX, 2.15, sideSign * (halfW - 0.075));
         mapMesh.rotation.y = sideSign > 0 ? Math.PI : 0;
@@ -482,6 +493,37 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
 
     root.add(carGroup);
   }
+
+  // Cold sterile blue fluorescent material for "The Cold Panel" anomaly
+  const tubeColdBlueMat = new THREE.MeshStandardMaterial({
+    color: 0xd9f2ff,
+    emissive: 0x6ec6ff,
+    emissiveIntensity: 1.9,
+    roughness: 0.2,
+  });
+  materials.push(tubeColdBlueMat);
+
+  // Window residue decal mesh in Car B across from seat (x = -0.95, y = 1.44, z = -(CAR_WIDTH/2 - 0.078))
+  const residueGeo = new THREE.PlaneGeometry(0.42, 0.42);
+  geometries.push(residueGeo);
+  const stickerTex = createWindowResidueTexture('sticker', maxAnisotropy);
+  const stainTex = createWindowResidueTexture('stain', maxAnisotropy);
+  textures.push(stickerTex, stainTex);
+  const residueMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: stickerTex,
+    transparent: true,
+    roughness: 0.35,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  materials.push(residueMat);
+  const windowResidueMesh = new THREE.Mesh(residueGeo, residueMat);
+  windowResidueMesh.position.set(-0.95, 1.44, -(CAR_WIDTH / 2 - 0.078));
+  windowResidueMesh.visible = false;
+  root.add(windowResidueMesh);
 
   // 8. Gangway Bellows & Sliding Gangway Doors between Cars A↔B (-9.75) and B↔C (+9.75)
   for (const gangwayX of GANGWAY_CENTERS_X) {
@@ -547,17 +589,117 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     }
   };
 
-  const updateRouteMaps = (route: RouteLineId, hollowStAnomaly = false): void => {
+  const updateRouteMaps = (
+    route: RouteLineId,
+    hollowStAnomaly = false,
+    overrideBulletColor?: string
+  ): void => {
     const meta = ROUTE_METADATA[route];
     const nextTex = createRouteMapTexture(maxAnisotropy, {
       stops: meta.stops,
       bulletLabel: meta.id,
-      bulletColor: meta.bulletColor,
+      bulletColor: overrideBulletColor ?? meta.bulletColor,
       hollowStAnomaly,
     });
     textures.push(nextTex);
     routeMapMat.map = nextTex;
     routeMapMat.needsUpdate = true;
+  };
+
+  let lastAppliedAnomalyKey = '';
+
+  const applyCarAnomaly = (
+    anomaly: ActiveAnomalyInstance | null,
+    route: RouteLineId
+  ): void => {
+    const active = anomaly && anomaly.manifested && !anomaly.caught ? anomaly : null;
+    const key = active
+      ? `${active.id}:${active.variantKey}:${active.adIndex ?? ''}:${route}`
+      : `none:${route}`;
+    if (key === lastAppliedAnomalyKey) return;
+    lastAppliedAnomalyKey = key;
+
+    // 1. Reset Car B across-the-aisle ad materials, window residue, cold ceiling tube, and route map
+    for (const mesh of adMeshes) {
+      if (mesh.userData.carId === 'B' && mesh.userData.baseMaterial) {
+        mesh.material = mesh.userData.baseMaterial as THREE.Material;
+      }
+    }
+    windowResidueMesh.visible = false;
+    for (const tube of ceilingTubes) {
+      tube.material = tubeWarmMat;
+    }
+    updateRouteMaps(route, false);
+
+    if (!active) return;
+
+    switch (active.id) {
+      case 'misprint':
+      case 'warped_copy':
+      case 'color_drift': {
+        const slotIdx = active.adIndex ?? 2;
+        const adDef =
+          ADS_ACROSS_AISLE[slotIdx % ADS_ACROSS_AISLE.length] ?? ADS_ACROSS_AISLE[0]!;
+        const targetMesh = adMeshes.find(
+          (m) =>
+            m.userData.carId === 'B' &&
+            m.userData.placement === 'across' &&
+            m.userData.slotIndex === slotIdx
+        );
+        if (targetMesh) {
+          const overrideTex = createAdTexture(
+            adDef,
+            maxAnisotropy,
+            active.adSwappedHeadline,
+            active.adShiftedBgColor
+          );
+          textures.push(overrideTex);
+          const overrideMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            map: overrideTex,
+            roughness: 0.42,
+            metalness: 0.06,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -1,
+          });
+          materials.push(overrideMat);
+          targetMesh.material = overrideMat;
+        }
+        break;
+      }
+
+      case 'window_residue': {
+        residueMat.map = active.variantKey === 'stain' ? stainTex : stickerTex;
+        residueMat.needsUpdate = true;
+        windowResidueMesh.visible = true;
+        break;
+      }
+
+      case 'cold_panel': {
+        for (const tube of ceilingTubes) {
+          if (
+            tube.userData.carId === 'B' &&
+            Math.abs(Number(tube.userData.tubeX) - -2.1) < 0.2
+          ) {
+            tube.material = tubeColdBlueMat;
+          }
+        }
+        break;
+      }
+
+      case 'route_map_error': {
+        if (active.variantKey === 'wrong_color') {
+          updateRouteMaps(route, false, '#c84b9e');
+        } else {
+          updateRouteMaps(route, true);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
   };
 
   const setCeilingLightIntensity = (multiplier: number): void => {
@@ -583,6 +725,7 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     updateGangwayDoors,
     updateSideDoors,
     updateRouteMaps,
+    applyCarAnomaly,
     setCeilingLightIntensity,
     dispose,
   };

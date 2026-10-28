@@ -42,6 +42,56 @@ export type PassengerArchetype =
 
 export type ParentSpeakerId = 'mom' | 'dad';
 
+export type AnomalyId =
+  | 'misprint'
+  | 'window_residue'
+  | 'cold_panel'
+  | 'man_across_aisle'
+  | 'route_map_error'
+  | 'color_drift'
+  | 'relocated_passenger'
+  | 'additional_passenger'
+  | 'warped_copy'
+  | 'woman_on_bench'
+  | 'mom_fixed'
+  | 'dad_answering'
+  | 'empty_car';
+
+export type PsychClass = 'I' | 'II' | 'III' | 'IV';
+
+export type EvidenceStatusChip = 'CAUGHT' | 'DOCUMENTED' | 'UNCONFIRMED' | 'NOTHING';
+
+export interface ActiveAnomalyInstance {
+  id: AnomalyId;
+  title: string;
+  psychClass: PsychClass;
+  tierIndex: 0 | 1 | 2 | 3;
+  reportDescription: string;
+  caseFileNote: string;
+  targetX: number;
+  targetY: number;
+  targetZ: number;
+  closeUpRead: boolean;
+  manifested: boolean;
+  caught: boolean;
+  variantKey: string;
+  adIndex?: number;
+  adSwappedHeadline?: string;
+  adShiftedBgColor?: string;
+  dadLine?: string;
+}
+
+export interface RideAnomalyRecord {
+  id: AnomalyId;
+  title: string;
+  psychClass: PsychClass;
+  stopNumber: number;
+  segmentId: string;
+  reportDescription: string;
+  caught: boolean;
+  caughtByPhoto?: boolean;
+}
+
 export interface MaskCheckOption {
   index: 0 | 1 | 2;
   text: string;
@@ -158,6 +208,13 @@ export interface EngineSnapshot {
   paranoidFlashText: string | null;
   interventionsCount: number;
   lastReactionReason: string | null;
+  activeAnomaly: ActiveAnomalyInstance | null;
+  flagHoldProgress: number;
+  isFlagHolding: boolean;
+  rideAnomalies: RideAnomalyRecord[];
+  anomaliesSpawnedCount: number;
+  anomaliesCaughtCount: number;
+  falseFlagsCount: number;
   sanity: number;
   sanityTier: SanityTier;
   suspicion: number;
@@ -173,5 +230,6 @@ export interface EngineSnapshot {
   playerYaw: number;
   playerPitch: number;
 }
+
 
 

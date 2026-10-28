@@ -158,3 +158,45 @@ test('gameEngine handles mask checks, unasked 1/2/3 replies, and suspicion inter
   gameEngine.returnToMenu();
 });
 
+test('gameEngine handles anomaly manifestation, 0.7s Flag catch, false flags, and stop-arrival misses', () => {
+  gameEngine.startRide({ chapter: 1, nightmare: false });
+
+  // Spawn and immediately manifest window_residue
+  gameEngine.spawnStretchAnomaly('window_residue', true);
+  const snap1 = gameEngine.getSnapshot();
+  assert.equal(snap1.activeAnomaly?.id, 'window_residue');
+  assert.equal(snap1.activeAnomaly?.manifested, true);
+  assert.equal(snap1.activeAnomaly?.caught, false);
+
+  // Catch the active anomaly via Flag (caughtByPhoto = false)
+  const caught = gameEngine.catchActiveAnomaly(false);
+  assert.equal(caught, true);
+  const snap2 = gameEngine.getSnapshot();
+  assert.equal(snap2.activeAnomaly?.caught, true);
+  assert.equal(snap2.anomaliesCaughtCount, 1);
+  assert.equal(snap2.rideAnomalies.length, 1);
+  assert.equal(snap2.rideAnomalies[0]?.id, 'window_residue');
+  assert.equal(snap2.rideAnomalies[0]?.caught, true);
+  assert.equal(snap2.rideAnomalies[0]?.caughtByPhoto, false);
+
+  // Holding Flag for 0.7s when anomaly is already caught triggers a false flag (-3 sanity)
+  const sanityBeforeFalseFlag = gameEngine.getSnapshot().sanity;
+  gameEngine.setFlagHolding(true);
+  gameEngine.stepRide(0.75);
+  const snap3 = gameEngine.getSnapshot();
+  assert.equal(snap3.falseFlagsCount, 1);
+  assert.equal(snap3.sanity, sanityBeforeFalseFlag - 3);
+
+  // Spawn a second anomaly and arrive at stop without catching -> recorded as missed (caught: false)
+  gameEngine.spawnStretchAnomaly('cold_panel', true);
+  gameEngine.arriveAtCurrentStop();
+  const snap4 = gameEngine.getSnapshot();
+  assert.equal(snap4.rideAnomalies.length, 2);
+  assert.equal(snap4.rideAnomalies[1]?.id, 'cold_panel');
+  assert.equal(snap4.rideAnomalies[1]?.caught, false);
+
+  gameEngine.returnToMenu();
+});
+
+
+
