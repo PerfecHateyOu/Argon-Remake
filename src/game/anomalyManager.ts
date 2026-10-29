@@ -4,9 +4,14 @@ import {
   ANOMALY_GAZE_THRESHOLD_8S_RAD,
   ANOMALY_GAZE_THRESHOLD_FINAL_3S_RAD,
   ANOMALY_GAZE_THRESHOLD_INITIAL_RAD,
+  CAMERA_FAR,
+  CAMERA_FOV_LANDSCAPE,
+  CAMERA_NEAR,
   FLAG_HOLD_DURATION_SEC,
   PLAYER_SEAT_X,
   PLAYER_SEAT_Z,
+  POLAROID_GAZE_THRESHOLD_RAD,
+  POLAROID_MAX_DIST_M,
 } from '../constants';
 import type {
   ActiveAnomalyInstance,
@@ -166,8 +171,110 @@ export function shouldAnomalyManifest(params: {
 }
 
 /**
+ * Checks whether a 3D world point lies inside the player's camera frustum.
+ */
+export function isPointInsideCameraFrustum(
+  cameraX: number,
+  cameraY: number,
+  cameraZ: number,
+  yaw: number,
+  pitch: number,
+  targetX: number,
+  targetY: number,
+  targetZ: number,
+  aspect = 16 / 9
+): boolean {
+  const dx = targetX - cameraX;
+  const dy = targetY - cameraY;
+  const dz = targetZ - cameraZ;
+
+  // Inverse yaw (-yaw around Y), then inverse pitch (-pitch around X) for YXZ Euler
+  const cosY = Math.cos(-yaw);
+  const sinY = Math.sin(-yaw);
+  const rx = dx * cosY + dz * sinY;
+  const ry = dy;
+  const rz = -dx * sinY + dz * cosY;
+
+  const cosP = Math.cos(-pitch);
+  const sinP = Math.sin(-pitch);
+  const camX = rx;
+  const camY = ry * cosP - rz * sinP;
+  const camZ = ry * sinP + rz * cosP;
+
+  const depth = -camZ;
+  if (depth < CAMERA_NEAR || depth > CAMERA_FAR) {
+    return false;
+  }
+
+  const tanHalfV = Math.tan((CAMERA_FOV_LANDSCAPE * Math.PI) / 360);
+  const tanHalfH = tanHalfV * Math.max(1, aspect);
+  const ndcX = camX / (depth * tanHalfH);
+  const ndcY = camY / (depth * tanHalfV);
+
+  return Math.abs(ndcX) <= 1 && Math.abs(ndcY) <= 1;
+}
+
+/**
+ * Checks whether an active manifested anomaly is framed for a Polaroid shot:
+ * - Full-screen/lighting anomalies with no object ('empty_car', 'cold_panel') are framed by any shot.
+ * - Object anomalies are framed if within 18 m, under 0.65 rad from view center, and inside the camera frustum.
+ */
+export function isAnomalyFramed(
+  anomaly: ActiveAnomalyInstance | null,
+  cameraX: number,
+  cameraY: number,
+  cameraZ: number,
+  yaw: number,
+  pitch: number,
+  maxAngleRad = POLAROID_GAZE_THRESHOLD_RAD
+): boolean {
+  if (!anomaly || !anomaly.manifested) {
+    return false;
+  }
+
+  // Full-screen / lighting anomalies with no object are framed by any shot
+  if (anomaly.id === 'empty_car' || anomaly.id === 'cold_panel') {
+    return true;
+  }
+
+  const dist = Math.hypot(
+    anomaly.targetX - cameraX,
+    anomaly.targetY - cameraY,
+    anomaly.targetZ - cameraZ
+  );
+  if (dist > POLAROID_MAX_DIST_M) {
+    return false;
+  }
+
+  const angleRad = computeCameraAngleToTarget(
+    cameraX,
+    cameraY,
+    cameraZ,
+    yaw,
+    pitch,
+    anomaly.targetX,
+    anomaly.targetY,
+    anomaly.targetZ
+  );
+  if (angleRad >= maxAngleRad) {
+    return false;
+  }
+
+  return isPointInsideCameraFrustum(
+    cameraX,
+    cameraY,
+    cameraZ,
+    yaw,
+    pitch,
+    anomaly.targetX,
+    anomaly.targetY,
+    anomaly.targetZ
+  );
+}
+
+/**
  * Checks whether the player is currently looking at a manifested anomaly
- * (used for both 0.7 s Flag catching, Polaroid framing, and staring-while-watched suspicion).
+ * (used for 0.7 s Flag catching and staring-while-watched suspicion).
  */
 export function isLookingAtAnomaly(
   anomaly: ActiveAnomalyInstance | null,
@@ -176,7 +283,7 @@ export function isLookingAtAnomaly(
   cameraZ: number,
   yaw: number,
   pitch: number,
-  maxAngleRad = 0.44
+  maxAngleRad = POLAROID_GAZE_THRESHOLD_RAD
 ): boolean {
   if (!anomaly || !anomaly.manifested || anomaly.caught) {
     return false;
@@ -191,7 +298,7 @@ export function isLookingAtAnomaly(
   if (anomaly.closeUpRead && dist > ANOMALY_CLOSE_UP_MAX_DIST_M + 0.5) {
     return false;
   }
-  if (dist > 8.5) {
+  if (dist > POLAROID_MAX_DIST_M) {
     return false;
   }
 
@@ -206,7 +313,19 @@ export function isLookingAtAnomaly(
     anomaly.targetZ
   );
 
-  return angleRad <= maxAngleRad;
+  return (
+    angleRad < maxAngleRad &&
+    isPointInsideCameraFrustum(
+      cameraX,
+      cameraY,
+      cameraZ,
+      yaw,
+      pitch,
+      anomaly.targetX,
+      anomaly.targetY,
+      anomaly.targetZ
+    )
+  );
 }
 
 /**

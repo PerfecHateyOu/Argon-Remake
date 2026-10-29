@@ -195,9 +195,13 @@ export interface FalseStopTrialRecord {
 export interface ActiveRestraintState {
   active: boolean;
   isHolding: boolean;
+  hasStartedHolding: boolean;
+  elapsedSec: number;
   graceRemainingSec: number;
   holdProgress: number;
-  reholdWarning: boolean;
+  dimOpacity: number;
+  momFrozen: boolean;
+  strangersVanished: boolean;
 }
 
 export interface StopDecisionRecord {
@@ -239,6 +243,8 @@ export type EvpSignalId =
   | 's4_phantom_pa'
   | 's7_night_wiretap'
   | 'emergency_channel'
+  | 'decoy_carrier_1'
+  | 'decoy_carrier_2'
   | 'carrier_90_20'
   | 'carrier_97_35'
   | 'carrier_104_30';

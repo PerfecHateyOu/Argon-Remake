@@ -103,6 +103,7 @@ export class SceneRenderer {
   private detachInput: (() => void) | null = null;
   private unsubPassingTrain: (() => void) | null = null;
   private unsubTier3Tear: (() => void) | null = null;
+  private unsubRestraintWhisper: (() => void) | null = null;
   private composer: EffectComposer | null = null;
   private glitchPass: GlitchPass | null = null;
   private glitchTimerSec = 0;
@@ -197,6 +198,10 @@ export class SceneRenderer {
       soundEngine.playTier3TearGlitch();
     });
 
+    this.unsubRestraintWhisper = gameEngine.onRestraintWhisper(() => {
+      soundEngine.playWordlessIntercomBurst(gameEngine.getSnapshot().sanityTier);
+    });
+
     if (!this.isSoftwareGl) {
       const composer = new EffectComposer(this.renderer);
       composer.addPass(new RenderPass(this.scene, this.camera));
@@ -289,7 +294,7 @@ export class SceneRenderer {
     }
 
     this.consistRig.applyCarAnomaly(snap.activeAnomaly, snap.activeRoute);
-    this.charactersRig.applyCharacterAnomaly(snap.activeAnomaly);
+    this.charactersRig.applyCharacterAnomaly(snap.activeAnomaly, snap.activeRestraint);
 
     const targetStationName =
       snap.phase === 'stop' || snap.phase === 'haven' || snap.rideSubPhase === 'departing'
@@ -514,6 +519,7 @@ export class SceneRenderer {
     this.detachInput?.();
     this.unsubPassingTrain?.();
     this.unsubTier3Tear?.();
+    this.unsubRestraintWhisper?.();
     this.composer?.dispose();
     this.consistRig.dispose();
     this.tunnelRig.dispose();

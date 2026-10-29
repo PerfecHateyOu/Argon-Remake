@@ -2,55 +2,47 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as esbuild from 'esbuild';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const outDir = path.join(rootDir, 'dist-offline');
 const distDir = path.join(rootDir, 'dist');
 
+fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 fs.mkdirSync(distDir, { recursive: true });
 
-// 1. Bundle all TypeScript, React 19, and Three.js modules into a single inline IIFE/ESM script
-const buildResult = await esbuild.build({
-  entryPoints: [path.join(rootDir, 'src/main.tsx')],
-  bundle: true,
-  minify: true,
-  format: 'iife',
-  target: ['es2022'],
-  jsx: 'automatic',
-  write: false,
-  loader: {
-    '.css': 'empty',
-  },
-  define: {
-    'process.env.NODE_ENV': '"production"',
-  },
+// 1. Build with `vite build --mode offline` so Tailwind CSS is compiled by @tailwindcss/vite
+const viteBin = path.join(rootDir, 'node_modules', '.bin', 'vite');
+execFileSync(viteBin, ['build', '--mode', 'offline', '--outDir', outDir], {
+  cwd: rootDir,
+  stdio: 'inherit',
 });
 
-const bundledJs = buildResult.outputFiles[0].text.replace(/<\/script>/gi, '<\\/script>');
-const rawCss = fs.readFileSync(path.join(rootDir, 'src/index.css'), 'utf8');
-
-// 2. Emit self-contained single-file index.html (zero external network or asset dependencies)
-const singleFileHtml = `<!doctype html>
-<html lang="en" class="dark">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>LAST LOCAL: A Liminal Subway Horror Game</title>
-    <meta name="description" content="Every stop takes you further from home. A first-person liminal horror ride on the NYC G train: spot subtle anomalies, keep your composure in front of your parents, and learn which doors are safe." />
-    <style>${rawCss}</style>
-  </head>
-  <body class="bg-[#040504] text-[#e6e2d8] antialiased selection:bg-[#ffcf8a]/20 selection:text-[#fff0d4] overflow-hidden">
-    <div id="root"></div>
-    <script>${bundledJs}</script>
-  </body>
-</html>
-`;
-
+// 2. Inline compiled CSS and JS assets into the single index.html so it opens with no network
 const htmlPath = path.join(outDir, 'index.html');
-fs.writeFileSync(htmlPath, singleFileHtml, 'utf8');
+let html = fs.readFileSync(htmlPath, 'utf8');
+
+html = html.replace(
+  /<link\b[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi,
+  (_match, href) => {
+    const assetPath = path.resolve(outDir, href.replace(/^\.\//, ''));
+    const css = fs.readFileSync(assetPath, 'utf8');
+    return `<style>${css}</style>`;
+  }
+);
+
+html = html.replace(
+  /<script\b[^>]*src=["']([^"']+)["'][^>]*><\/script>/gi,
+  (_match, src) => {
+    const assetPath = path.resolve(outDir, src.replace(/^\.\//, ''));
+    const js = fs.readFileSync(assetPath, 'utf8').replace(/<\/script>/gi, '<\\/script>');
+    return `<script type="module">${js}</script>`;
+  }
+);
+
+fs.writeFileSync(htmlPath, html, 'utf8');
+fs.rmSync(path.join(outDir, 'assets'), { recursive: true, force: true });
 
 // 3. Emit canonical v5.3 README.txt
 const readmeText = `LAST LOCAL: A Liminal Subway Horror Game

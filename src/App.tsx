@@ -261,17 +261,25 @@ export default function App() {
 
     const handleBlur = () => {
       gameEngine.setFlagHolding(false);
-      gameEngine.setRestraintHolding(false);
+      gameEngine.notifyFocusLoss();
       gameEngine.setEvpRecording(false);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleBlur();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [
     settingsOpen,
@@ -338,6 +346,15 @@ export default function App() {
           onSelectChapter={(chapter) => gameEngine.setStartChapter(chapter)}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenCaseFiles={() => setCaseFilesOpen(true)}
+        />
+      )}
+
+      {/* Stop 11 Restraint Screen Dim Overlay (dims toward 0.4 over first 6s) */}
+      {snapshot.activeRestraint?.active && snapshot.activeRestraint.dimOpacity > 0 && (
+        <div
+          data-testid="restraint-dim-overlay"
+          className="fixed inset-0 z-[5] bg-black pointer-events-none"
+          style={{ opacity: snapshot.activeRestraint.dimOpacity }}
         />
       )}
 
@@ -575,13 +592,13 @@ export default function App() {
                     <span>
                       {snapshot.activeRestraint.isHolding
                         ? `Holding ${Math.round(snapshot.activeRestraint.holdProgress * 100)}%`
-                        : `Grace ${snapshot.activeRestraint.graceRemainingSec.toFixed(1)}s`}
+                        : snapshot.activeRestraint.graceRemainingSec > 0
+                          ? `Grace ${snapshot.activeRestraint.graceRemainingSec.toFixed(1)}s`
+                          : `${Math.max(0, 5.0 - snapshot.activeRestraint.elapsedSec).toFixed(1)}s`}
                     </span>
                   </div>
                   <div className="text-sm font-semibold text-[#fff0d4]">
-                    {snapshot.activeRestraint.reholdWarning
-                      ? 'Hold Space again. Don’t react.'
-                      : 'Hold Space. Don’t let go. Don’t react.'}
+                    Hold Space. Don’t let go. Don’t react.
                   </div>
                   <div className="w-full h-1.5 bg-[#e6e2d8]/15 overflow-hidden">
                     <div

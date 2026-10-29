@@ -1,6 +1,6 @@
 import React from 'react';
 import { Camera, X } from 'lucide-react';
-import { POLAROID_MAX_SHOTS } from '../constants';
+import { STARTING_FILM } from '../constants';
 
 interface PolaroidViewfinderProps {
   open: boolean;
@@ -51,7 +51,7 @@ export const PolaroidViewfinder: React.FC<PolaroidViewfinderProps> = ({
             {/* Bottom status bar inside frame */}
             <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-[0.14em] text-[#f2efe9]/85">
               <span>
-                FILM: {shotsRemaining}/{POLAROID_MAX_SHOTS}
+                FILM: {shotsRemaining}/{STARTING_FILM}
               </span>
               {outOfFilm && (
                 <span className="text-[#ff8a7a] font-semibold">OUT OF FILM</span>

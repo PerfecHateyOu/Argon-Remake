@@ -283,7 +283,7 @@ export const PolaroidAlbum: React.FC<PolaroidAlbumProps> = ({
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono font-bold text-[#ffcf8a]">
-                            {tape.frequencyMhz.toFixed(2)} MHz
+                            {Math.round(tape.frequencyMhz)} kHz
                           </span>
                           <span className="text-xs font-mono font-semibold text-[#f2efe9]">
                             {tape.title}

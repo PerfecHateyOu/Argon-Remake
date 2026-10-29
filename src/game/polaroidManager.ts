@@ -1,5 +1,4 @@
 import {
-  ANOMALY_CLOSE_UP_MAX_DIST_M,
   POLAROID_GAZE_THRESHOLD_RAD,
 } from '../constants';
 import type {
@@ -8,7 +7,7 @@ import type {
   PolaroidPhotoRecord,
   RouteLineId,
 } from '../types';
-import { isLookingAtAnomaly } from './anomalyManager';
+import { isAnomalyFramed } from './anomalyManager';
 
 /**
  * Pure check for whether an active manifested anomaly is framed inside the
@@ -23,7 +22,7 @@ export function isAnomalyFramedInViewfinder(params: {
   playerPitch: number;
 }): boolean {
   const { activeAnomaly, playerX, playerEyeY, playerZ, playerYaw, playerPitch } = params;
-  return isLookingAtAnomaly(
+  return isAnomalyFramed(
     activeAnomaly,
     playerX,
     playerEyeY,

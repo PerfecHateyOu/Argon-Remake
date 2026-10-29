@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CAR_CENTERS_X } from '../constants';
 import { computeParentTargetHeadAngles } from '../game/passengerBehavior';
-import type { ActiveAnomalyInstance, PassengerArchetype } from '../types';
+import type { ActiveAnomalyInstance, ActiveRestraintState, PassengerArchetype } from '../types';
 
 export interface CharacterActorRig {
   id: string;
@@ -45,7 +45,10 @@ export interface CarCharactersRig {
   setPufferRelocatedAnomaly: (active: boolean) => void;
   setAdditionalPassengerAnomaly: (active: boolean) => void;
   setEmptyCarAnomaly: (active: boolean) => void;
-  applyCharacterAnomaly: (anomaly: ActiveAnomalyInstance | null) => void;
+  applyCharacterAnomaly: (
+    anomaly: ActiveAnomalyInstance | null,
+    restraint?: ActiveRestraintState | null
+  ) => void;
   resetAnomalies: () => void;
   dispose: () => void;
 }
@@ -375,6 +378,7 @@ export function buildCarCharacters(): CarCharactersRig {
   // 1. MOM & DAD (Seated with the player on the +Z bench in Car B, facing -Z = Math.PI)
   // Note: Local +Z of each character is their forward direction; rotation.y = Math.PI points +Z toward world -Z.
   // ============================================================================
+  const momSkinMat = makeMat(0xc89d7c, 0.68);
   const mom = createSeatedCharacter({
     id: 'mom',
     label: 'Mom',
@@ -384,7 +388,7 @@ export function buildCarCharacters(): CarCharactersRig {
     worldZ: 1.08,
     facingYaw: Math.PI,
     torsoMat: momCoatMat,
-    skinMat: skinWarmMat,
+    skinMat: momSkinMat,
     hairMat: hairDarkMat,
     isParent: true,
   });
@@ -395,6 +399,11 @@ export function buildCarCharacters(): CarCharactersRig {
   geometries.push(momScarf.geometry);
   momScarf.position.set(0, 1.01, 0.02);
   mom.root.add(momScarf);
+
+  const momPhoneMesh = new THREE.Mesh(phoneGeo, phoneScreenMat);
+  momPhoneMesh.position.set(0.14, 0.62, 0.2);
+  momPhoneMesh.rotation.x = -0.55;
+  mom.root.add(momPhoneMesh);
 
   const dad = createSeatedCharacter({
     id: 'dad',
@@ -632,11 +641,13 @@ export function buildCarCharacters(): CarCharactersRig {
 
   const setMomFixedAnomaly = (active: boolean): void => {
     momFixedActive = active;
-    const scale = active ? 2.15 : 1.0;
+    const scale = active ? 2.2 : 1.0;
     if (mom.leftPupil && mom.rightPupil) {
       mom.leftPupil.scale.set(scale, scale, 1);
       mom.rightPupil.scale.set(scale, scale, 1);
     }
+    momSkinMat.color.setHex(active ? 0xdfd9ce : 0xc89d7c);
+    momPhoneMesh.visible = !active;
   };
 
   const setMtaStaringAnomaly = (active: boolean): void => {
@@ -687,39 +698,54 @@ export function buildCarCharacters(): CarCharactersRig {
     setEmptyCarAnomaly(false);
   };
 
-  const applyCharacterAnomaly = (anomaly: ActiveAnomalyInstance | null): void => {
+  const applyCharacterAnomaly = (
+    anomaly: ActiveAnomalyInstance | null,
+    restraint?: ActiveRestraintState | null
+  ): void => {
     const active = anomaly && anomaly.manifested && !anomaly.caught ? anomaly : null;
-    const key = active ? `${active.id}:${active.variantKey}` : 'none';
+    const restraintMomFrozen = Boolean(restraint?.active && restraint.momFrozen);
+    const restraintStrangersVanished = Boolean(
+      restraint?.active && restraint.strangersVanished
+    );
+    const key = `${active ? `${active.id}:${active.variantKey}` : 'none'}|rm:${restraintMomFrozen}|rs:${restraintStrangersVanished}`;
     if (key === lastCharacterAnomalyKey) return;
     lastCharacterAnomalyKey = key;
 
     resetAnomalies();
-    if (!active) return;
 
-    switch (active.id) {
-      case 'man_across_aisle':
-        setMtaStaringAnomaly(true);
-        break;
-      case 'relocated_passenger':
-        setPufferRelocatedAnomaly(true);
-        break;
-      case 'additional_passenger':
-        setAdditionalPassengerAnomaly(true);
-        break;
-      case 'woman_on_bench':
-        setCoatNeckTwistAnomaly(true);
-        break;
-      case 'mom_fixed':
-        setMomFixedAnomaly(true);
-        break;
-      case 'dad_answering':
-        dadAnsweringActive = true;
-        break;
-      case 'empty_car':
-        setEmptyCarAnomaly(true);
-        break;
-      default:
-        break;
+    if (active) {
+      switch (active.id) {
+        case 'man_across_aisle':
+          setMtaStaringAnomaly(true);
+          break;
+        case 'relocated_passenger':
+          setPufferRelocatedAnomaly(true);
+          break;
+        case 'additional_passenger':
+          setAdditionalPassengerAnomaly(true);
+          break;
+        case 'woman_on_bench':
+          setCoatNeckTwistAnomaly(true);
+          break;
+        case 'mom_fixed':
+          setMomFixedAnomaly(true);
+          break;
+        case 'dad_answering':
+          dadAnsweringActive = true;
+          break;
+        case 'empty_car':
+          setEmptyCarAnomaly(true);
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (restraintMomFrozen) {
+      setMomFixedAnomaly(true);
+    }
+    if (restraintStrangersVanished) {
+      setEmptyCarAnomaly(true);
     }
   };
 

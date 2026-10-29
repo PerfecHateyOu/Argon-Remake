@@ -19,12 +19,16 @@ import {
   POLAROID_FLASH_DECAY_PER_SEC,
   POLAROID_MAX_SHOTS,
   RESTRAINT_CEILING_RAISE,
+  RESTRAINT_DURATION_SEC,
   RESTRAINT_GRACE_SECONDS,
+  RESTRAINT_START_WINDOW_SEC,
   ROLLSIGN_DISPLAY_SEC,
   SANITY_BANDS_BY_STOP,
   SANITY_DELTAS,
   SANITY_TIER_THRESHOLDS,
   SEGMENT_TABLE,
+  SHUTTER_COOLDOWN,
+  STARTING_FILM,
   STOP_DWELL_DURATION_SEC,
   SUSPICION_DELTAS,
   SUSPICION_INTERVENTION_THRESHOLD,
@@ -72,6 +76,7 @@ import {
   buildEvpTapeRecord,
   clampEvpFrequency,
   evaluateEvpTuning,
+  reshuffleEvpFrequencies,
 } from './evpManager';
 import {
   buildPolaroidPhotoRecord,
@@ -116,7 +121,7 @@ export type TrialChoiceId =
   | 'left_train'
   | 'right_train';
 
-export const RESTRAINT_HOLD_DURATION_SEC = 4.0;
+export const RESTRAINT_HOLD_DURATION_SEC = RESTRAINT_DURATION_SEC;
 
 export function computeSanityTier(sanity: number): SanityTier {
   if (sanity >= SANITY_TIER_THRESHOLDS.HIGH) return 'High';
@@ -220,9 +225,20 @@ class GameEngine {
   private staringAtAnomalySec = 0;
   private stareReactionCooldownSec = 0;
   private falseFlagCooldownSec = 0;
+  private shutterCooldownSec = 0;
+  private photographedAnomalyInStretch = false;
+  private evpListenElapsedSec = 0;
+  private evpLastLockedId: EvpSignalId | null = null;
+  private forcedWatcherLabel: 'Mom' | 'Dad' | null = null;
+  private forcedWatcherRemainingSec = 0;
+  private restraintBeat15Played = false;
+  private restraintBeat40Played = false;
+  private restraintBeat70Played = false;
+  private restraintBeat105Played = false;
 
   private passingTrainListeners = new Set<() => void>();
   private tier3TearListeners = new Set<() => void>();
+  private restraintWhisperListeners = new Set<() => void>();
 
   constructor() {
     const settings = settingsStore.get();
@@ -276,7 +292,7 @@ class GameEngine {
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
       cameraOpen: false,
-      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidShotsRemaining: STARTING_FILM,
       polaroidFlashIntensity: 0,
       photos: [],
       albumOpen: false,
@@ -392,6 +408,20 @@ class GameEngine {
     return () => {
       this.tier3TearListeners.delete(cb);
     };
+  }
+
+  public onRestraintWhisper(cb: () => void): () => void {
+    this.restraintWhisperListeners.add(cb);
+    return () => {
+      this.restraintWhisperListeners.delete(cb);
+    };
+  }
+
+  private forceParentLook(): 'Mom' | 'Dad' {
+    const chosen: 'Mom' | 'Dad' = Math.random() < 0.5 ? 'Mom' : 'Dad';
+    this.forcedWatcherLabel = chosen;
+    this.forcedWatcherRemainingSec = 3.0;
+    return chosen;
   }
 
   public showSubtitle(item: Omit<SubtitleItem, 'id'>, durationSec = 4.2): void {
@@ -741,6 +771,7 @@ class GameEngine {
     this.usedAnomalyIds.add(chosenId);
     const instance = buildActiveAnomalyInstance(chosenId);
     this.staringAtAnomalySec = 0;
+    this.photographedAnomalyInStretch = false;
 
     if (forceManifest) {
       this.update({ activeAnomaly: instance });
@@ -891,16 +922,25 @@ class GameEngine {
 
   /**
    * Snaps a Polaroid 600 square photo.
-   * - Consumes 1 of the 6 shots.
+   * - Consumes 1 of the 8 starting shots (max 10) with a 0.9 s shutter cooldown.
    * - Triggers white flash overlay.
-   * - If an active manifested anomaly is framed in the viewfinder, catches it (+2 Sanity, caughtByPhoto = true).
-   * - If a parent is watching, adds +12 Suspicion ("Took a flash photo while ${watcher.label} was watching").
+   * - Records framed anomalies silently and scores them at the next stop.
+   * - If a parent is watching, adds +10 Suspicion ("Took a flash photo while ${watcher} was watching").
+   *   If no parent is watching, 50% chance one turns to look.
    */
   public snapPolaroidPhoto(sourceCanvas?: HTMLCanvasElement | null): boolean {
-    if (this.snapshot.polaroidShotsRemaining <= 0) {
+    if (this.shutterCooldownSec > 0) {
+      return false;
+    }
+    if (
+      this.snapshot.polaroidShotsRemaining <= 0 ||
+      this.snapshot.photos.length >= POLAROID_MAX_SHOTS
+    ) {
       this.showSubtitle({ text: 'Out of film.' }, 2.2);
       return false;
     }
+
+    this.shutterCooldownSec = SHUTTER_COOLDOWN;
 
     const seg = this.getCurrentSegmentRule();
     const camY = playerController.getState().y || 1.24;
@@ -916,7 +956,7 @@ class GameEngine {
       : null;
 
     if (framedAnomaly) {
-      this.catchActiveAnomaly(true);
+      this.photographedAnomalyInStretch = true;
     }
 
     const dataUrl = captureSquarePolaroidDataUrl({
@@ -939,6 +979,10 @@ class GameEngine {
     });
 
     const watcher = this.snapshot.watchingParentLabel;
+    let nextWatcher = watcher;
+    if (!watcher && Math.random() < 0.5) {
+      nextWatcher = this.forceParentLook();
+    }
     const nextSuspicion = watcher
       ? this.snapshot.suspicion + SUSPICION_DELTAS.CAMERA_FLASH_WATCHED
       : this.snapshot.suspicion;
@@ -950,6 +994,7 @@ class GameEngine {
       polaroidShotsRemaining: this.snapshot.polaroidShotsRemaining - 1,
       polaroidFlashIntensity: 1.0,
       photos: [...this.snapshot.photos, newPhoto],
+      watchingParentLabel: nextWatcher,
       suspicion: nextSuspicion,
       lastReactionReason: nextReason,
     });
@@ -992,12 +1037,25 @@ class GameEngine {
     }
 
     const nextOpen = typeof force === 'boolean' ? force : !this.snapshot.evpOpen;
+    const raising = nextOpen && !this.snapshot.evpOpen;
+    if (raising || !nextOpen) {
+      this.evpListenElapsedSec = 0;
+      this.evpLastLockedId = null;
+    }
+
+    const seg = this.getCurrentSegmentRule();
     const evalRes = evaluateEvpTuning({
       frequencyMhz: this.snapshot.evpFrequencyMhz,
       trainSpeedMps: this.snapshot.trainSpeedMps,
       route: this.snapshot.activeRoute,
       isAboveGround: this.snapshot.isOnTrestle || this.snapshot.isOpenAirStation,
+      stopNumber: seg.stopNumber,
+      listenElapsedSec: this.evpListenElapsedSec,
     });
+    this.evpLastLockedId = evalRes.lockedSpec ? evalRes.lockedSpec.id : null;
+
+    const watcher = this.snapshot.watchingParentLabel;
+    const raisedWhileWatched = Boolean(raising && watcher);
 
     this.update({
       evpOpen: nextOpen,
@@ -1009,11 +1067,17 @@ class GameEngine {
       evpLockedSignalId: evalRes.lockedSpec ? evalRes.lockedSpec.id : null,
       evpLockedTitle: evalRes.lockedTitle,
       evpTranscriptLive: evalRes.liveTranscript,
+      suspicion: raisedWhileWatched
+        ? this.snapshot.suspicion + SUSPICION_DELTAS.RECORDER_RAISED_WATCHED
+        : this.snapshot.suspicion,
+      lastReactionReason: raisedWhileWatched
+        ? `Held up a tape recorder while ${watcher} was watching`
+        : this.snapshot.lastReactionReason,
     });
   }
 
   /**
-   * Steps the EVP dial frequency by `deltaSteps * 0.05 MHz` (5 kHz step).
+   * Steps the EVP dial frequency by `deltaSteps * 1 kHz`.
    */
   public stepEvpFrequency(deltaSteps: number): void {
     const nextFreq = clampEvpFrequency(
@@ -1027,11 +1091,27 @@ class GameEngine {
    */
   public setEvpFrequency(freqMhz: number): void {
     const clamped = clampEvpFrequency(freqMhz);
+    const seg = this.getCurrentSegmentRule();
+    const prelimRes = evaluateEvpTuning({
+      frequencyMhz: clamped,
+      trainSpeedMps: this.snapshot.trainSpeedMps,
+      route: this.snapshot.activeRoute,
+      isAboveGround: this.snapshot.isOnTrestle || this.snapshot.isOpenAirStation,
+      stopNumber: seg.stopNumber,
+      listenElapsedSec: 0,
+    });
+    const nextLockedId = prelimRes.lockedSpec ? prelimRes.lockedSpec.id : null;
+    if (nextLockedId !== this.evpLastLockedId) {
+      this.evpListenElapsedSec = 0;
+      this.evpLastLockedId = nextLockedId;
+    }
     const evalRes = evaluateEvpTuning({
       frequencyMhz: clamped,
       trainSpeedMps: this.snapshot.trainSpeedMps,
       route: this.snapshot.activeRoute,
       isAboveGround: this.snapshot.isOnTrestle || this.snapshot.isOpenAirStation,
+      stopNumber: seg.stopNumber,
+      listenElapsedSec: this.evpListenElapsedSec,
     });
 
     this.update({
@@ -1058,28 +1138,36 @@ class GameEngine {
 
   /**
    * Plays or stops a recorded EVP tape in the Evidence Log or HUD.
-   * Playing a tape out loud while a parent is watching adds +8 Suspicion.
+   * Playing a tape out loud adds +10 Suspicion once, plus 50% chance an unwatching parent turns to look.
    */
   public toggleTapePlayback(tapeId: EvpSignalId): void {
     const isAlreadyPlaying = this.snapshot.playingTapeId === tapeId;
     const nextPlaying = isAlreadyPlaying ? null : tapeId;
 
     const watcher = this.snapshot.watchingParentLabel;
-    const playedWhileWatched = Boolean(nextPlaying && watcher);
+    let nextWatcher = watcher;
+    if (nextPlaying && !watcher && Math.random() < 0.5) {
+      nextWatcher = this.forceParentLook();
+    }
 
     this.update({
       playingTapeId: nextPlaying,
-      suspicion: playedWhileWatched
+      watchingParentLabel: nextWatcher,
+      suspicion: nextPlaying
         ? this.snapshot.suspicion + SUSPICION_DELTAS.TAPE_PLAYED_WATCHED
         : this.snapshot.suspicion,
-      lastReactionReason: playedWhileWatched
-        ? `Played a tape out loud while ${watcher} was watching`
+      lastReactionReason: nextPlaying
+        ? watcher
+          ? `Played a tape out loud while ${watcher} was watching`
+          : nextWatcher
+            ? `Played a tape out loud while ${nextWatcher} was watching`
+            : 'Played a tape out loud'
         : this.snapshot.lastReactionReason,
     });
   }
 
   /**
-   * Starts the Stop 11 Greenpoint Av Restraint moment (2.5 s initial grace window, 4.0 s hold).
+   * Starts the Stop 11 Greenpoint Av Restraint moment (5.0 s start window, 15.0 s hold).
    */
   public triggerRestraintMoment(): void {
     const isTouch =
@@ -1092,17 +1180,28 @@ class GameEngine {
     const restraintState: ActiveRestraintState = {
       active: true,
       isHolding: false,
-      graceRemainingSec: RESTRAINT_GRACE_SECONDS,
+      hasStartedHolding: false,
+      elapsedSec: 0,
+      graceRemainingSec: 0,
       holdProgress: 0,
-      reholdWarning: false,
+      dimOpacity: 0,
+      momFrozen: false,
+      strangersVanished: false,
     };
 
     this.restraintTriggeredInSegment = true;
+    this.restraintBeat15Played = false;
+    this.restraintBeat40Played = false;
+    this.restraintBeat70Played = false;
+    this.restraintBeat105Played = false;
+
     this.update({
       activeRestraint: restraintState,
       activeMaskCheck: null,
       watchingParentLabel: 'Mom',
       lightFlickerIntensity: 0.08,
+      isFlagHolding: false,
+      flagHoldProgress: 0,
     });
     this.showSubtitle(
       {
@@ -1110,8 +1209,47 @@ class GameEngine {
         stageDirection: '(her mouth doesn’t move)',
         text: promptText,
       },
-      6.5
+      3.5
     );
+  }
+
+  /**
+   * Grants the 2.5 s grace window ONLY after pause, alt-tab, or focus loss.
+   */
+  public notifyFocusLoss(): void {
+    const cur = this.snapshot.activeRestraint;
+    if (!cur || !cur.active) return;
+    this.update({
+      activeRestraint: {
+        ...cur,
+        isHolding: false,
+        graceRemainingSec: RESTRAINT_GRACE_SECONDS,
+      },
+    });
+  }
+
+  private failRestraint(reasonText: 'You let go' | 'You couldn’t keep it together'): void {
+    this.update({
+      activeRestraint: null,
+      restraintHeld: false,
+      restraintCompleted: true,
+      sanity: this.snapshot.sanity + SANITY_DELTAS.RESTRAINT_FAIL,
+      suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.MASK_FAIL,
+      lastReactionReason: 'Lost your composure during the restraint moment',
+      watchingParentLabel: null,
+      lightFlickerIntensity: 1.0,
+      isFlagHolding: false,
+      flagHoldProgress: 0,
+    });
+    if (this.snapshot.suspicion !== 40) {
+      this.showSubtitle(
+        {
+          stageDirection: 'You flinch. Dad sees it.',
+          text: reasonText,
+        },
+        3.8
+      );
+    }
   }
 
   /**
@@ -1121,29 +1259,39 @@ class GameEngine {
     const cur = this.snapshot.activeRestraint;
     if (!cur || !cur.active || cur.isHolding === holding) return;
 
-    const isTouch =
-      typeof window !== 'undefined' &&
-      ('ontouchstart' in window || navigator.maxTouchPoints > 0);
-    const reholdWarning = !holding && cur.holdProgress > 0;
+    if (holding) {
+      this.update({
+        activeRestraint: {
+          ...cur,
+          isHolding: true,
+          hasStartedHolding: true,
+          graceRemainingSec: 0,
+        },
+      });
+      return;
+    }
+
+    if (cur.graceRemainingSec > 0) {
+      this.update({
+        activeRestraint: {
+          ...cur,
+          isHolding: false,
+        },
+      });
+      return;
+    }
+
+    if (cur.hasStartedHolding) {
+      this.failRestraint('You let go');
+      return;
+    }
 
     this.update({
       activeRestraint: {
         ...cur,
-        isHolding: holding,
-        reholdWarning,
+        isHolding: false,
       },
     });
-
-    if (reholdWarning) {
-      this.showSubtitle(
-        {
-          text: isTouch
-            ? 'Hold the button again. Don’t react.'
-            : 'Hold Space again. Don’t react.',
-        },
-        2.5
-      );
-    }
   }
 
   /**
@@ -1495,6 +1643,18 @@ class GameEngine {
     this.staringAtAnomalySec = 0;
     this.stareReactionCooldownSec = 0;
     this.falseFlagCooldownSec = 0;
+    this.shutterCooldownSec = 0;
+    this.photographedAnomalyInStretch = false;
+    this.evpListenElapsedSec = 0;
+    this.evpLastLockedId = null;
+    this.forcedWatcherLabel = null;
+    this.forcedWatcherRemainingSec = 0;
+    this.restraintBeat15Played = false;
+    this.restraintBeat40Played = false;
+    this.restraintBeat70Played = false;
+    this.restraintBeat105Played = false;
+
+    reshuffleEvpFrequencies();
 
     playerController.resetToSeat();
     pointerLock.clearErrorHint();
@@ -1566,7 +1726,7 @@ class GameEngine {
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
       cameraOpen: false,
-      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidShotsRemaining: STARTING_FILM,
       polaroidFlashIntensity: 0,
       photos: [],
       albumOpen: false,
@@ -1642,6 +1802,11 @@ class GameEngine {
     this.restraintTriggeredInSegment = false;
     this.maskChecksTriggeredInSegment = 0;
     this.staringAtAnomalySec = 0;
+    this.photographedAnomalyInStretch = false;
+    this.evpListenElapsedSec = 0;
+    this.evpLastLockedId = null;
+    this.forcedWatcherLabel = null;
+    this.forcedWatcherRemainingSec = 0;
 
     let nextRollsign = this.snapshot.rollsign;
     if (seg.id === '6') {
@@ -1727,6 +1892,16 @@ class GameEngine {
     const openAir = isElevatedOpenAirStop(route, seg.stationIndex);
 
     this.stopElapsedSec = 0;
+
+    // Score framed Polaroid photos together with flags at the stop
+    if (
+      this.photographedAnomalyInStretch &&
+      this.snapshot.activeAnomaly?.manifested &&
+      !this.snapshot.activeAnomaly.caught
+    ) {
+      this.catchActiveAnomaly(true);
+    }
+    this.photographedAnomalyInStretch = false;
 
     // If an anomaly manifested on this stretch and was NOT caught, apply SANITY_DELTAS.MISS (-5)
     const missedActiveAnomaly =
@@ -1850,6 +2025,15 @@ class GameEngine {
     if (this.falseFlagCooldownSec > 0) {
       this.falseFlagCooldownSec = Math.max(0, this.falseFlagCooldownSec - dtSec);
     }
+    if (this.shutterCooldownSec > 0) {
+      this.shutterCooldownSec = Math.max(0, this.shutterCooldownSec - dtSec);
+    }
+    if (this.forcedWatcherRemainingSec > 0) {
+      this.forcedWatcherRemainingSec = Math.max(0, this.forcedWatcherRemainingSec - dtSec);
+      if (this.forcedWatcherRemainingSec <= 0) {
+        this.forcedWatcherLabel = null;
+      }
+    }
 
     // 1. Decay active rollsign, subtitle & paranoid flash timers
     let bannerChanged = false;
@@ -1967,9 +2151,47 @@ class GameEngine {
       }
     }
 
-    // 2b. Step active Stop 11 Restraint moment
+    // 2b. Step active Stop 11 Restraint moment (15 s total, 5 s start window, timed beats)
     if (this.snapshot.activeRestraint && this.snapshot.activeRestraint.active) {
       const cur = this.snapshot.activeRestraint;
+      const nextRestraintElapsed = cur.elapsedSec + dtSec;
+      const nextDim = Number(Math.min(0.4, (nextRestraintElapsed / 6.0) * 0.4).toFixed(3));
+      let nextMomFrozen = cur.momFrozen;
+      let nextStrangersVanished = cur.strangersVanished;
+
+      if (!this.restraintBeat15Played && nextRestraintElapsed >= 1.5) {
+        this.restraintBeat15Played = true;
+        nextMomFrozen = true;
+        bannerChanged = true;
+      }
+      if (!this.restraintBeat40Played && nextRestraintElapsed >= 4.0) {
+        this.restraintBeat40Played = true;
+        this.showSubtitle(
+          {
+            speaker: 'Dad',
+            text: 'No. We’re not getting off. You know that.',
+          },
+          3.8
+        );
+      }
+      if (!this.restraintBeat70Played && nextRestraintElapsed >= 7.0) {
+        this.restraintBeat70Played = true;
+        nextStrangersVanished = true;
+        for (const cb of this.restraintWhisperListeners) cb();
+        bannerChanged = true;
+      }
+      if (!this.restraintBeat105Played && nextRestraintElapsed >= 10.5) {
+        this.restraintBeat105Played = true;
+        this.showSubtitle(
+          {
+            speaker: 'Mom',
+            stageDirection: '(her mouth doesn’t move)',
+            text: 'You can stop pretending.',
+          },
+          4.0
+        );
+      }
+
       if (cur.isHolding) {
         const nextHold = Math.min(1, cur.holdProgress + dtSec / RESTRAINT_HOLD_DURATION_SEC);
         if (nextHold >= 1) {
@@ -1982,6 +2204,8 @@ class GameEngine {
             sanity: this.snapshot.sanity + SANITY_DELTAS.RESTRAINT_OK,
             watchingParentLabel: null,
             lightFlickerIntensity: 1.0,
+            isFlagHolding: false,
+            flagHoldProgress: 0,
           });
           this.showSubtitle(
             {
@@ -1996,42 +2220,52 @@ class GameEngine {
         const nextBucket = Math.round(nextHold * 20);
         this.snapshot.activeRestraint = {
           ...cur,
+          elapsedSec: Number(nextRestraintElapsed.toFixed(2)),
           holdProgress: Number(nextHold.toFixed(3)),
+          dimOpacity: nextDim,
+          momFrozen: nextMomFrozen,
+          strangersVanished: nextStrangersVanished,
         };
-        if (prevBucket !== nextBucket) bannerChanged = true;
-      } else {
-        const decayRate = cur.holdProgress > 0 ? 1.8 : 1.0;
-        const nextGrace = cur.graceRemainingSec - dtSec * decayRate;
+        if (prevBucket !== nextBucket || nextDim !== cur.dimOpacity) bannerChanged = true;
+      } else if (cur.graceRemainingSec > 0) {
+        const nextGrace = cur.graceRemainingSec - dtSec;
         if (nextGrace <= 0) {
-          this.update({
-            activeRestraint: null,
-            restraintHeld: false,
-            restraintCompleted: true,
-            sanity: this.snapshot.sanity + SANITY_DELTAS.RESTRAINT_FAIL,
-            suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.MASK_FAIL,
-            lastReactionReason: 'Lost your composure during the restraint moment',
-            watchingParentLabel: null,
-            lightFlickerIntensity: 1.0,
-          });
-          if (this.snapshot.suspicion !== 40) {
-            this.showSubtitle(
-              {
-                stageDirection: 'You flinch. Dad sees it.',
-                text: cur.holdProgress > 0 ? 'You let go' : 'You couldn’t keep it together',
-              },
-              3.8
-            );
-          }
+          this.failRestraint(
+            cur.hasStartedHolding ? 'You let go' : 'You couldn’t keep it together'
+          );
           return;
         }
         const prevTenths = Math.ceil(cur.graceRemainingSec * 10);
         const nextTenths = Math.ceil(nextGrace * 10);
         this.snapshot.activeRestraint = {
           ...cur,
+          elapsedSec: Number(nextRestraintElapsed.toFixed(2)),
           graceRemainingSec: Number(nextGrace.toFixed(2)),
+          dimOpacity: nextDim,
+          momFrozen: nextMomFrozen,
+          strangersVanished: nextStrangersVanished,
         };
-        if (prevTenths !== nextTenths) bannerChanged = true;
+        if (prevTenths !== nextTenths || nextDim !== cur.dimOpacity) bannerChanged = true;
+      } else if (!cur.hasStartedHolding) {
+        if (nextRestraintElapsed >= RESTRAINT_START_WINDOW_SEC) {
+          this.failRestraint('You couldn’t keep it together');
+          return;
+        }
+        this.snapshot.activeRestraint = {
+          ...cur,
+          elapsedSec: Number(nextRestraintElapsed.toFixed(2)),
+          dimOpacity: nextDim,
+          momFrozen: nextMomFrozen,
+          strangersVanished: nextStrangersVanished,
+        };
+        if (nextDim !== cur.dimOpacity) bannerChanged = true;
+      } else {
+        this.failRestraint('You let go');
+        return;
       }
+
+      if (bannerChanged) this.emit();
+      return;
     }
 
     const seg = this.getCurrentSegmentRule();
@@ -2169,6 +2403,8 @@ class GameEngine {
         nextWatcher = this.snapshot.activeMaskCheck.speakerLabel;
       } else if (this.snapshot.activeRestraint) {
         nextWatcher = 'Mom';
+      } else if (this.forcedWatcherRemainingSec > 0 && this.forcedWatcherLabel) {
+        nextWatcher = this.forcedWatcherLabel;
       } else if (!seg.silent) {
         const cyclePeriod = this.snapshot.nightmareMode ? 6.2 : 8.4;
         const watchDuration = this.snapshot.nightmareMode ? 3.2 : 2.6;
@@ -2259,31 +2495,47 @@ class GameEngine {
         }
       }
 
-      // Step EVP Microcassette Recorder tuning, recording & parent-watching suspicion
+      // Step EVP Microcassette Recorder tuning & recording
       if (this.snapshot.evpOpen) {
+        const isAboveGround =
+          (this.snapshot.activeRoute === 'G' && seg.id === '12') ||
+          this.snapshot.isOpenAirStation;
+        const prelimRes = evaluateEvpTuning({
+          frequencyMhz: this.snapshot.evpFrequencyMhz,
+          trainSpeedMps: nextSpeed,
+          route: this.snapshot.activeRoute,
+          isAboveGround,
+          stopNumber: seg.stopNumber,
+          listenElapsedSec: 0,
+        });
+        if (prelimRes.lockedSpec) {
+          if (this.evpLastLockedId === prelimRes.lockedSpec.id) {
+            this.evpListenElapsedSec += dtSec;
+          } else {
+            this.evpLastLockedId = prelimRes.lockedSpec.id;
+            this.evpListenElapsedSec = dtSec;
+          }
+        } else {
+          this.evpLastLockedId = null;
+          this.evpListenElapsedSec = 0;
+        }
+
         const evalRes = evaluateEvpTuning({
           frequencyMhz: this.snapshot.evpFrequencyMhz,
           trainSpeedMps: nextSpeed,
           route: this.snapshot.activeRoute,
-          isAboveGround:
-            (this.snapshot.activeRoute === 'G' && seg.id === '12') ||
-            this.snapshot.isOpenAirStation,
+          isAboveGround,
+          stopNumber: seg.stopNumber,
+          listenElapsedSec: this.evpListenElapsedSec,
         });
 
+        if (this.snapshot.evpTranscriptLive !== evalRes.liveTranscript) {
+          bannerChanged = true;
+        }
         this.snapshot.evpSignalStrength = evalRes.signalStrength;
         this.snapshot.evpLockedSignalId = evalRes.lockedSpec ? evalRes.lockedSpec.id : null;
         this.snapshot.evpLockedTitle = evalRes.lockedTitle;
         this.snapshot.evpTranscriptLive = evalRes.liveTranscript;
-
-        if (nextWatcher !== null) {
-          const nextSusp =
-            this.snapshot.suspicion + SUSPICION_DELTAS.RECORDER_HELD_PER_SEC * dtSec;
-          this.update({
-            suspicion: nextSusp,
-            lastReactionReason: `Held up a tape recorder while ${nextWatcher} was watching`,
-          });
-          bannerChanged = true;
-        }
 
         if (this.snapshot.evpIsRecording && evalRes.lockedSpec) {
           const nextRecProg = Math.min(
@@ -2390,6 +2642,9 @@ class GameEngine {
     if (seg.stopType === 'final') return;
 
     if (seg.stopType === 'haven') {
+      const isTouch =
+        typeof window !== 'undefined' &&
+        ('ontouchstart' in window || navigator.maxTouchPoints > 0);
       this.update({
         hasRecorder: true,
         suspicion: this.snapshot.suspicion + SUSPICION_DELTAS.REFUSE_SAFE_HAVEN,
@@ -2402,10 +2657,11 @@ class GameEngine {
       }
       this.showSubtitle(
         {
-          speaker: 'Mom',
-          text: 'You don’t want to stretch your legs? …Okay.',
-          stageDirection:
-            'Dad: Here, hold onto this. Your grandfather’s old recorder. Never could get it to stop picking up the radio.',
+          speaker: 'Dad',
+          text: 'Here. Your grandfather’s. He used it on the night shift. Never could get it to stop picking up the radio.',
+          stageDirection: isTouch
+            ? 'Dad gave you a tape recorder. Tap Recorder to raise it.'
+            : 'Dad gave you a tape recorder. Press R to raise it.',
         },
         4.2
       );
@@ -2440,6 +2696,9 @@ class GameEngine {
 
     // Stop 6 Safe Haven: restores +15 sanity, hands over grandfather's tape recorder, enters 'haven' phase
     if (seg.stopType === 'haven') {
+      const isTouch =
+        typeof window !== 'undefined' &&
+        ('ontouchstart' in window || navigator.maxTouchPoints > 0);
       this.havenElapsedSec = 0;
       this.update({
         phase: 'haven',
@@ -2452,7 +2711,9 @@ class GameEngine {
         {
           speaker: 'Dad',
           text: 'Here. Your grandfather’s. He used it on the night shift. Never could get it to stop picking up the radio.',
-          stageDirection: 'Dad gave you a tape recorder. Press R to raise it.',
+          stageDirection: isTouch
+            ? 'Dad gave you a tape recorder. Tap Recorder to raise it.'
+            : 'Dad gave you a tape recorder. Press R to raise it.',
         },
         4.2
       );
@@ -2664,7 +2925,7 @@ class GameEngine {
       anomaliesCaughtCount: 0,
       falseFlagsCount: 0,
       cameraOpen: false,
-      polaroidShotsRemaining: POLAROID_MAX_SHOTS,
+      polaroidShotsRemaining: STARTING_FILM,
       polaroidFlashIntensity: 0,
       photos: [],
       albumOpen: false,
@@ -2708,6 +2969,7 @@ class GameEngine {
     const nextPaused = typeof force === 'boolean' ? force : !this.snapshot.paused;
     if (nextPaused) {
       pointerLock.unlock({ quiet: true });
+      this.notifyFocusLoss();
     }
     this.update({ paused: nextPaused });
   }

@@ -40,11 +40,11 @@ test('evaluateRideEnding resolves all 8 canonical endings in strict priority ord
   assert.equal(e1.primaryButtonLabel, 'Ride again');
   assert.ok(e1.narrativeText.includes('Court Sq'));
 
-  // 2a. The Eternal Commute via Stop 12 bait (even if peakSuspicion === 0)
+  // 2a. The Eternal Commute via Stop 12 bait (when peakSuspicion > 0)
   const e2Bait = evaluateRideEnding({
     route: 'G',
     selectedExit: null,
-    peakSuspicion: 0,
+    peakSuspicion: 10,
     sanityRetainedPercent: 90,
     anomalyAccuracyPercent: 100,
     tapesCount: 3,
@@ -213,8 +213,16 @@ test('computeSanityRetainedPercent, computeAnomalyAccuracyPercent, and formatSto
     finalSanity: 90,
     restraintHeld: true,
   });
-  // Average of 50% and 100% = 75%, plus +6 restraint bonus = 81%
-  assert.equal(pct, 81);
+  // Average of 50% and 100% = 75% (RESTRAINT_CEILING_RAISE only raises ceiling, not percentage)
+  assert.equal(pct, 75);
+  assert.equal(
+    computeSanityRetainedPercent({
+      stopDecisions: [],
+      finalSanity: 100,
+      restraintHeld: false,
+    }),
+    0
+  );
 
   assert.equal(computeAnomalyAccuracyPercent(3, 4), 75);
   assert.equal(computeAnomalyAccuracyPercent(0, 0), 100);

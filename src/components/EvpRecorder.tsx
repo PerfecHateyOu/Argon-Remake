@@ -44,6 +44,8 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
     statusLine = 'Nothing comes through at a standstill.';
   } else if (isLocked && liveTranscript) {
     statusLine = liveTranscript;
+  } else if (isLocked) {
+    statusLine = 'Signal locked. Listening…';
   } else if (isRecording) {
     statusLine = 'Recording hiss…';
   }
@@ -80,8 +82,8 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
         <button
           type="button"
           data-testid="evp-tune-down"
-          aria-label="Tune down 5 kHz"
-          title="Tune down 5 kHz"
+          aria-label="Tune down 1 kHz"
+          title="Tune down 1 kHz"
           onClick={() => onStepFrequency(-1)}
           className="flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
         >
@@ -94,7 +96,8 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
             data-testid="evp-frequency-readout"
             className="text-xl font-mono font-bold tracking-[0.1em] text-[#ffcf8a]"
           >
-            {frequencyMhz.toFixed(2)} <span className="text-xs font-normal text-[#f2efe9]/65">MHz</span>
+            {Math.round(frequencyMhz)}{' '}
+            <span className="text-xs font-normal text-[#f2efe9]/65">kHz</span>
           </div>
           <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-[#f2efe9]/55">
             {isLocked ? (
@@ -102,7 +105,7 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
                 Locked on · {lockedTitle}
               </span>
             ) : (
-              <span>{ isRecording ? 'Recording' : 'Not recording' }</span>
+              <span>{isRecording ? 'Recording' : 'Not recording'}</span>
             )}
           </div>
         </div>
@@ -110,8 +113,8 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
         <button
           type="button"
           data-testid="evp-tune-up"
-          aria-label="Tune up 5 kHz"
-          title="Tune up 5 kHz"
+          aria-label="Tune up 1 kHz"
+          title="Tune up 1 kHz"
           onClick={() => onStepFrequency(1)}
           className="flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
         >

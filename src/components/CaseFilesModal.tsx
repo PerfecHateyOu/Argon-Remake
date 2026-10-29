@@ -315,7 +315,7 @@ export const CaseFilesModal: React.FC<CaseFilesModalProps> = ({
                         <div className="text-xs font-semibold text-[#fff0d4]">
                           {tape.title}{' '}
                           <span className="font-mono text-[#ffcf8a]">
-                            ({tape.frequencyMhz.toFixed(2)} MHz)
+                            ({Math.round(tape.frequencyMhz)} kHz)
                           </span>
                           {tape.isCarrierOnly && (
                             <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono border border-[#e6e2d8]/25 text-[#9e9a90]">

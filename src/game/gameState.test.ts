@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SEGMENT_TABLE } from '../constants';
 import { wrapTunnelRingX } from '../graphics/tunnelBuilder';
+import { getStationFrequencyKhz } from './evpManager';
 import {
   clampSanityForStop,
   computeArrivalFlickerIntensity,
@@ -278,11 +279,12 @@ test('gameEngine handles Stop 11 Restraint (hold steady vs fail), Newtown Creek 
   gameEngine.enterSegment(10);
   assert.equal(gameEngine.getSnapshot().segmentId, '11');
 
-  // Trigger Restraint and hold Space for 4.0s -> restraintHeld = true, ceiling bonus = +6 (ceiling 15)
+  // Trigger Restraint and hold Space for 15.0s -> restraintHeld = true, ceiling bonus = +6 (ceiling 15)
   gameEngine.triggerRestraintMoment();
   assert.equal(gameEngine.getSnapshot().activeRestraint?.active, true);
+  assert.equal(gameEngine.getSnapshot().activeRestraint?.graceRemainingSec, 0);
   gameEngine.setRestraintHolding(true);
-  gameEngine.stepRide(4.1);
+  gameEngine.stepRide(15.1);
   assert.equal(gameEngine.getSnapshot().activeRestraint, null);
   assert.equal(gameEngine.getSnapshot().restraintHeld, true);
   assert.equal(gameEngine.getSnapshot().restraintCeilingBonus, 6);
@@ -295,7 +297,7 @@ test('gameEngine handles Stop 11 Restraint (hold steady vs fail), Newtown Creek 
   assert.equal(gameEngine.getSnapshot().isOnTrestle, true);
   assert.equal(gameEngine.getSnapshot().trestleWitnessed, true);
 
-  // Arrive at Stop 12 (21 St bait) and step off -> ends ride with The Eternal Commute
+  // Arrive at Stop 12 (21 St bait) and step off -> ends ride
   gameEngine.arriveAtCurrentStop();
   assert.equal(gameEngine.getSnapshot().currentStationName, '21 St');
   gameEngine.stepOffTrain();
@@ -308,7 +310,7 @@ test('gameEngine handles Stop 11 Restraint (hold steady vs fail), Newtown Creek 
 test('gameEngine handles Polaroid 600 anomaly capture, watched flash suspicion, EVP tuning/recording, and tape playback', () => {
   gameEngine.startRide({ chapter: 2, nightmare: false });
   assert.equal(gameEngine.getSnapshot().hasRecorder, true);
-  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 6);
+  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 8);
 
   // Spawn & manifest window_residue and snap a Polaroid while looking at it
   gameEngine.spawnStretchAnomaly('window_residue', true);
@@ -318,21 +320,28 @@ test('gameEngine handles Polaroid 600 anomaly capture, watched flash suspicion, 
 
   const caughtByPhoto = gameEngine.snapPolaroidPhoto(null);
   assert.equal(caughtByPhoto, true);
-  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 5);
-  assert.equal(gameEngine.getSnapshot().anomaliesCaughtCount, 1);
+  assert.equal(gameEngine.getSnapshot().polaroidShotsRemaining, 7);
+  // Photo scoring is private on shutter and scored at the next stop
+  assert.equal(gameEngine.getSnapshot().anomaliesCaughtCount, 0);
   assert.equal(gameEngine.getSnapshot().photos.length, 1);
   assert.equal(gameEngine.getSnapshot().photos[0]?.anomalyId, 'window_residue');
   assert.equal(gameEngine.getSnapshot().photos[0]?.developed, false);
 
-  // Raise EVP recorder, tune to 98.20 MHz (The conductor), and hold record for 1.7s
+  // Arrive at the stop -> framed photo scores the anomaly catch
+  gameEngine.arriveAtCurrentStop();
+  assert.equal(gameEngine.getSnapshot().anomaliesCaughtCount, 1);
+
+  // Enter stretch 12 where The conductor broadcast is active, raise EVP recorder, tune, and hold record for 1.6s
+  gameEngine.enterSegment(11);
   gameEngine.toggleEvpRecorder(true);
   assert.equal(gameEngine.getSnapshot().evpOpen, true);
   assert.equal(gameEngine.getSnapshot().cameraOpen, false);
-  gameEngine.setEvpFrequency(98.2);
+  const conductorKhz = getStationFrequencyKhz('conductor_echo');
+  gameEngine.setEvpFrequency(conductorKhz);
   assert.equal(gameEngine.getSnapshot().evpLockedSignalId, 'conductor_echo');
 
   gameEngine.setEvpRecording(true);
-  gameEngine.stepRide(1.7);
+  gameEngine.stepRide(1.6);
   assert.equal(gameEngine.getSnapshot().tapes.length, 1);
   assert.equal(gameEngine.getSnapshot().tapes[0]?.id, 'conductor_echo');
   assert.equal(gameEngine.getSnapshot().hasConductorEvp, true);

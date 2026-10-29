@@ -1,6 +1,9 @@
 node_modules/
 build/
 dist/
+dist-offline/
+Last-Local-offline.zip
+.aistudio/
 coverage/
 .DS_Store
 *.log

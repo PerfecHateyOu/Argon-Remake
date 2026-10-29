@@ -1,4 +1,4 @@
-import { COMPOSURE_INTACT_MAX_SUSPICION, RESTRAINT_CEILING_RAISE, SEGMENT_TABLE } from '../constants';
+import { COMPOSURE_INTACT_MAX_SUSPICION, SEGMENT_TABLE } from '../constants';
 import type {
   EndingId,
   EndingResult,
@@ -129,17 +129,16 @@ export const ENDING_CATALOG: Record<EndingId, EndingCatalogEntry> = {
 /**
  * Computes "Sanity Retained" (0..100%):
  * "How well you held on, stop by stop: where your sanity sat inside each stop's band, averaged over the ride."
- * Adds +6 restraint bonus when Stop 11 Restraint was held.
+ * Average of each stop's position inside its sanity band × 100, rounded (0 if no stops).
  */
 export function computeSanityRetainedPercent(params: {
   stopDecisions: readonly StopDecisionRecord[];
-  finalSanity: number;
-  restraintHeld: boolean;
+  finalSanity?: number;
+  restraintHeld?: boolean;
 }): number {
-  const { stopDecisions, finalSanity, restraintHeld } = params;
+  const { stopDecisions } = params;
   if (stopDecisions.length === 0) {
-    const raw = Math.max(0, Math.min(100, Math.round(finalSanity)));
-    return Math.min(100, raw + (restraintHeld ? RESTRAINT_CEILING_RAISE : 0));
+    return 0;
   }
 
   let sumNormalized = 0;
@@ -151,8 +150,7 @@ export function computeSanityRetainedPercent(params: {
   }
 
   const baseAveragePct = Math.round((sumNormalized / stopDecisions.length) * 100);
-  const withBonus = baseAveragePct + (restraintHeld ? RESTRAINT_CEILING_RAISE : 0);
-  return Math.max(0, Math.min(100, withBonus));
+  return Math.max(0, Math.min(100, baseAveragePct));
 }
 
 /**
@@ -190,12 +188,8 @@ export function evaluateRideEnding(input: EvaluateEndingInput): EndingResult {
 
   let chosenId: EndingId = 'civilian_extraction';
 
-  // Priority 1: The Unbroken Mask — peak Suspicion 0 (when ride wasn't aborted at Stop 12 bait or lost to <30% sanity loop)
-  if (
-    !input.steppedOffAtBait &&
-    input.sanityRetainedPercent >= 30 &&
-    input.peakSuspicion === 0
-  ) {
+  // Priority 1: The Unbroken Mask — peak Suspicion 0
+  if (input.peakSuspicion === 0) {
     chosenId = 'unbroken_mask';
   }
   // Priority 2: The Eternal Commute — stepped off at 21 St bait (stop 12) OR Sanity Retained < 30%

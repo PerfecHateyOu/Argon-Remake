@@ -54,7 +54,7 @@ export const MOUSE_SENSITIVITY_RAD_PER_PX = 0.0022;
 export const TOUCH_LOOK_SENSITIVITY_RAD_PER_PX = 0.0042;
 export const PITCH_MIN_RAD = -1.12;
 export const PITCH_MAX_RAD = 1.12;
-export const TRIAL_YAW_LIMIT_RAD = 1.35;
+export const TRIAL_YAW_LIMIT_RAD = 1.2;
 
 export const LOOK_SPEED_MIN = 0.4;
 export const LOOK_SPEED_MAX = 2.0;
@@ -102,9 +102,10 @@ export const SUSPICION_DELTAS = {
   VISIBLE_REACTION: 10,
   CLEAN_STOP: -5,
   REFUSE_SAFE_HAVEN: 10,
-  CAMERA_FLASH_WATCHED: 12,
+  CAMERA_FLASH_WATCHED: 10,
+  RECORDER_RAISED_WATCHED: 10,
   RECORDER_HELD_PER_SEC: 4,
-  TAPE_PLAYED_WATCHED: 8,
+  TAPE_PLAYED_WATCHED: 10,
 } as const;
 
 export const SANITY_DELTAS = {
@@ -124,20 +125,28 @@ export const SANITY_DELTAS = {
 
 export const RESTRAINT_CEILING_RAISE = 6;
 export const RESTRAINT_GRACE_SECONDS = 2.5;
+export const RESTRAINT_START_WINDOW_SEC = 5.0;
+export const RESTRAINT_DURATION_SEC = 15.0;
 export const FLAG_HOLD_SECONDS = 0.7;
 export const FLAG_HOLD_DURATION_SEC = 0.7;
 
-export const POLAROID_MAX_SHOTS = 6;
-export const POLAROID_GAZE_THRESHOLD_RAD = 0.44;
+export const STARTING_FILM = 8;
+export const POLAROID_MAX_SHOTS = 10;
+export const SHUTTER_COOLDOWN = 0.9;
+export const POLAROID_MAX_DIST_M = 18;
+export const POLAROID_GAZE_THRESHOLD_RAD = 0.65;
 export const POLAROID_FLASH_DECAY_PER_SEC = 2.8;
 
-export const EVP_FREQ_MIN_MHZ = 88.1;
-export const EVP_FREQ_MAX_MHZ = 107.9;
-export const EVP_FREQ_DEFAULT_MHZ = 88.5;
-export const EVP_FREQ_STEP_MHZ = 0.05;
-export const EVP_LOCK_TOLERANCE_MHZ = 0.08;
-export const EVP_SIGNAL_RANGE_MHZ = 0.25;
-export const EVP_RECORD_DURATION_SEC = 1.6;
+export const EVP_FREQ_MIN_MHZ = 70;
+export const EVP_FREQ_MAX_MHZ = 180;
+export const EVP_FREQ_DEFAULT_MHZ = 100;
+export const EVP_FREQ_STEP_MHZ = 1;
+export const EVP_LOCK_TOLERANCE_MHZ = 1.0;
+export const EVP_SIGNAL_RANGE_MHZ = 4.0;
+export const EVP_MIN_SIGNAL_SPACING_KHZ = 8;
+export const EVP_RECORD_HOLD = 1.5;
+export const EVP_RECORD_DURATION_SEC = 1.5;
+export const EVP_LISTEN_REVEAL_SEC = 3.0;
 
 export const ANOMALY_GAZE_THRESHOLD_INITIAL_RAD = 0.7;
 export const ANOMALY_GAZE_THRESHOLD_8S_RAD = 0.35;

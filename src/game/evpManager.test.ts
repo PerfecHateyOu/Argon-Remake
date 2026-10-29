@@ -5,6 +5,9 @@ import {
   clampEvpFrequency,
   evaluateEvpTuning,
   EVP_STATION_SPECS,
+  getActiveEvpSignalsForStretch,
+  getStationFrequencyKhz,
+  reshuffleEvpFrequencies,
   resolveEvpStationText,
 } from './evpManager';
 import {
@@ -14,54 +17,87 @@ import {
 } from './polaroidManager';
 import { buildActiveAnomalyInstance } from './anomalyManager';
 
-test('clampEvpFrequency clamps to [88.1, 107.9] MHz and rounds to 0.05 MHz (5 kHz) steps', () => {
-  assert.equal(clampEvpFrequency(80.0), 88.1);
-  assert.equal(clampEvpFrequency(110.0), 107.9);
-  assert.equal(clampEvpFrequency(98.212), 98.2);
-  assert.equal(clampEvpFrequency(98.238), 98.25);
+test('clampEvpFrequency clamps to [70, 180] kHz and rounds to 1 kHz steps', () => {
+  assert.equal(clampEvpFrequency(50.0), 70);
+  assert.equal(clampEvpFrequency(200.0), 180);
+  assert.equal(clampEvpFrequency(98.2), 98);
+  assert.equal(clampEvpFrequency(134.7), 135);
 });
 
-test('evaluateEvpTuning locks onto all 11 canonical EVP signals + 3 carrier tones while moving and returns 0 at standstill', () => {
-  assert.equal(EVP_STATION_SPECS.length, 14);
-  const voiceSpecs = EVP_STATION_SPECS.filter((s) => !s.isCarrierOnly);
-  const carrierSpecs = EVP_STATION_SPECS.filter((s) => s.isCarrierOnly);
-  assert.equal(voiceSpecs.length, 11);
-  assert.equal(carrierSpecs.length, 3);
+test('evaluateEvpTuning locks onto reshuffled 70-180 kHz EVP signals on their stretches, reveals transcript after 3s, and uses G-line conductor line', () => {
+  assert.equal(EVP_STATION_SPECS.length, 11);
+  reshuffleEvpFrequencies(() => 0.37);
+
+  // Verify >= 8 kHz spacing and 2 decoy carriers per stretch
+  const stretch12Signals = getActiveEvpSignalsForStretch(12);
+  const decoys = stretch12Signals.filter((s) => s.isCarrierOnly);
+  assert.equal(decoys.length, 2);
+
+  const conductorFreq = getStationFrequencyKhz('conductor_echo');
 
   // At standstill (trainSpeedMps <= 0.5), nothing comes through
   const standstill = evaluateEvpTuning({
-    frequencyMhz: 98.2,
+    frequencyMhz: conductorFreq,
     trainSpeedMps: 0,
     route: 'G',
     isAboveGround: false,
+    stopNumber: 12,
+    listenElapsedSec: 4.0,
   });
   assert.equal(standstill.signalStrength, 0);
   assert.equal(standstill.lockedSpec, null);
 
-  // Moving at 98.20 MHz locks onto The conductor (under the river variant underground)
-  const underRiver = evaluateEvpTuning({
-    frequencyMhz: 98.2,
+  // Conductor is only receivable on stops 12-13, not on stop 7
+  const wrongStretch = evaluateEvpTuning({
+    frequencyMhz: conductorFreq,
     trainSpeedMps: 15.5,
     route: 'G',
     isAboveGround: false,
+    stopNumber: 7,
+    listenElapsedSec: 4.0,
   });
-  assert.equal(underRiver.lockedSpec?.id, 'conductor_echo');
-  assert.equal(underRiver.lockedTitle, 'The conductor');
-  assert.equal(
-    underRiver.liveTranscript,
-    '…this is your conductor. We are under the river. This train does not go under the river…'
-  );
+  assert.notEqual(wrongStretch.lockedSpec?.id, 'conductor_echo');
 
-  // Above ground on G trestle switches conductor line to above-ground variant
-  const aboveGround = evaluateEvpTuning({
-    frequencyMhz: 98.2,
+  // On stop 12, before 3s of listening, lockedSpec is set but liveTranscript is null
+  const before3s = evaluateEvpTuning({
+    frequencyMhz: conductorFreq,
     trainSpeedMps: 15.5,
     route: 'G',
-    isAboveGround: true,
+    isAboveGround: false,
+    stopNumber: 12,
+    listenElapsedSec: 1.5,
+  });
+  assert.equal(before3s.lockedSpec?.id, 'conductor_echo');
+  assert.equal(before3s.lockedTitle, 'The conductor');
+  assert.equal(before3s.liveTranscript, null);
+
+  // After 3s of listening on the G line, full transcript reveals and ALWAYS uses "above ground"
+  const onGLine = evaluateEvpTuning({
+    frequencyMhz: conductorFreq,
+    trainSpeedMps: 15.5,
+    route: 'G',
+    isAboveGround: false,
+    stopNumber: 12,
+    listenElapsedSec: 3.1,
+  });
+  assert.equal(onGLine.lockedSpec?.id, 'conductor_echo');
+  assert.equal(
+    onGLine.liveTranscript,
+    '…this is your conductor. We are above ground. This train does not go above ground…'
+  );
+
+  // Off the G line (e.g. L train), conductor uses "under the river"
+  const offGLine = evaluateEvpTuning({
+    frequencyMhz: conductorFreq,
+    trainSpeedMps: 15.5,
+    route: 'L',
+    isAboveGround: false,
+    stopNumber: 12,
+    listenElapsedSec: 3.1,
   });
   assert.equal(
-    aboveGround.liveTranscript,
-    '…this is your conductor. We are above ground. This train does not go above ground…'
+    offGLine.liveTranscript,
+    '…this is your conductor. We are under the river. This train does not go under the river…'
   );
 
   // Emergency channel switches between Newtown Creek emergency channel (G) and Track emergency channel (L/7)
@@ -76,14 +112,14 @@ test('evaluateEvpTuning locks onto all 11 canonical EVP signals + 3 carrier tone
 
   // Build tape record
   const tape = buildEvpTapeRecord({
-    spec: underRiver.lockedSpec!,
+    spec: onGLine.lockedSpec!,
     route: 'G',
     isAboveGround: false,
-    stopNumber: 7,
+    stopNumber: 12,
   });
   assert.equal(tape.id, 'conductor_echo');
   assert.equal(tape.title, 'The conductor');
-  assert.equal(tape.stopNumber, 7);
+  assert.equal(tape.stopNumber, 12);
 });
 
 test('isAnomalyFramedInViewfinder detects manifested anomaly in Polaroid 600 square frame and formatCarLocationForPolaroid formats labels', () => {
