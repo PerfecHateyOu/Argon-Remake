@@ -6,6 +6,7 @@ interface StartScreenProps {
   snapshot: EngineSnapshot;
   archive: ProgressArchive;
   onBoard: () => void;
+  onPracticeStretch: () => void;
   onToggleNightmare: (enabled: boolean) => void;
   onSelectChapter: (chapter: ChapterStartOption) => void;
   onOpenSettings: () => void;
@@ -16,6 +17,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   snapshot,
   archive,
   onBoard,
+  onPracticeStretch,
   onToggleNightmare,
   onSelectChapter,
   onOpenSettings,
@@ -101,6 +103,18 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               className="px-7 py-3.5 bg-[#fff0d4] text-[#040504] font-semibold text-base tracking-wide hover:bg-[#ffcf8a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               Board train
+            </button>
+
+            <button
+              type="button"
+              data-testid="practice-stretch-button"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                onPracticeStretch();
+              }}
+              className="px-5 py-3.5 border border-[#ffcf8a]/40 bg-[#0d100d] text-[#ffcf8a] text-sm font-medium hover:border-[#ffcf8a] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              Practice stretch
             </button>
 
             <button

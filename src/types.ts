@@ -253,6 +253,55 @@ export interface EvpTapeRecord {
   stopNumber: number;
 }
 
+export type EndingId =
+  | 'unbroken_mask'
+  | 'eternal_commute'
+  | 'midnight_terminal'
+  | 'skyward_catwalk'
+  | 'dawn_horizon'
+  | 'exposed'
+  | 'disoriented_collapse'
+  | 'civilian_extraction';
+
+export interface EndingResult {
+  id: EndingId;
+  index: number; // 1..8
+  title: string;
+  badge: string;
+  narrativeText: string;
+  summary: string;
+  primaryButtonLabel: 'Get back on' | 'Ride again';
+  isAlternativeEscape: boolean;
+}
+
+export type AchievementId =
+  | 'first_contact'
+  | 'silver_halide_evidence'
+  | 'signal_hunter'
+  | 'phantom_broadcaster'
+  | 'the_unbroken_mask'
+  | 'night_watch'
+  | 'loop_breaker'
+  | 'chief_archivist';
+
+export interface AchievementDefinition {
+  id: AchievementId;
+  name: string;
+  description: string;
+}
+
+export type TutorialStepId = 'look_around' | 'dont_show_it' | 'read_the_doors' | 'ready';
+
+export interface TutorialState {
+  stepId: TutorialStepId;
+  stepNumber: 1 | 2 | 3 | 4;
+  title: string;
+  body: string;
+  coachHint: string;
+  feedbackText: string | null;
+  doorDemoStage: 'real' | 'false_early' | 'false_flicker' | 'summary';
+}
+
 export interface EngineSnapshot {
   phase: GamePhase;
   rideSubPhase: RideSubPhase;
@@ -281,6 +330,10 @@ export interface EngineSnapshot {
   rollsign: RollsignBanner | null;
   subtitle: SubtitleItem | null;
   selectedExit: ExitChoiceId | null;
+  resolvedEnding: EndingResult | null;
+  sanityRetainedPercent: number;
+  anomalyAccuracyPercent: number;
+  tutorialState: TutorialState | null;
   watchingParentLabel: 'Mom' | 'Dad' | null;
   activeMaskCheck: ActiveMaskCheckState | null;
   paranoidFlashText: string | null;

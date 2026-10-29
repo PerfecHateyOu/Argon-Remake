@@ -1,7 +1,15 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { GlitchPass } from 'three/addons/postprocessing/GlitchPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { soundEngine } from '../audio/soundEngine';
 import {
   AMBER_ACCENT_COLOR,
+  BREATHING_BY_TIER,
+  BREATHING_MAX_FLAG_BONUS_COUNT,
+  BREATHING_PER_FLAG_DEG,
   CAMERA_FAR,
   CAMERA_FOV_LANDSCAPE,
   CAMERA_NEAR,
@@ -21,7 +29,7 @@ import {
 import { gameEngine } from '../game/gameState';
 import { playerController } from '../input/keyLook';
 import { settingsStore } from '../settings';
-import type { RouteLineId } from '../types';
+import type { RouteLineId, SanityTier } from '../types';
 import { buildCarCharacters, type CarCharactersRig } from './characterBuilder';
 import { buildPassingTrain, type PassingTrainRig } from './passingTrain';
 import { buildSubwayConsist, type SubwayConsistRig } from './subwayCarBuilder';
@@ -40,6 +48,28 @@ export function computeCameraVerticalFov(aspect: number): number {
   const radH = THREE.MathUtils.degToRad(CAMERA_FOV_LANDSCAPE);
   const radV = 2 * Math.atan(Math.tan(radH / 2) / Math.max(0.45, aspect));
   return THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(radV), CAMERA_FOV_LANDSCAPE, 98);
+}
+
+/**
+ * Computes the sanity-tier inhale/exhale FOV breathing modulation in degrees.
+ * Zero at High sanity or when reducedEffects is active.
+ */
+export function computeBreathingFovOffsetDeg(params: {
+  elapsedSec: number;
+  sanityTier: SanityTier;
+  falseFlagsCount: number;
+  reducedEffects: boolean;
+}): number {
+  if (params.reducedEffects) return 0;
+  const spec = BREATHING_BY_TIER[params.sanityTier];
+  if (spec.bpm <= 0 || spec.amplitudeDeg <= 0) return 0;
+
+  const flagBonus =
+    Math.min(BREATHING_MAX_FLAG_BONUS_COUNT, Math.max(0, params.falseFlagsCount)) *
+    BREATHING_PER_FLAG_DEG;
+  const totalAmp = spec.amplitudeDeg + flagBonus;
+  const freqHz = spec.bpm / 60;
+  return Number((Math.sin(params.elapsedSec * freqHz * Math.PI * 2) * totalAmp).toFixed(4));
 }
 
 function detectSoftwareGl(): boolean {
@@ -72,6 +102,11 @@ export class SceneRenderer {
   private disposed = false;
   private detachInput: (() => void) | null = null;
   private unsubPassingTrain: (() => void) | null = null;
+  private unsubTier3Tear: (() => void) | null = null;
+  private composer: EffectComposer | null = null;
+  private glitchPass: GlitchPass | null = null;
+  private glitchTimerSec = 0;
+  private shakeTimerSec = 0;
 
   private consistRig: SubwayConsistRig;
   private tunnelRig: TunnelAndStationRig;
@@ -152,7 +187,26 @@ export class SceneRenderer {
 
     this.unsubPassingTrain = gameEngine.onPassingTrainTrigger(() => {
       this.passingTrainRig.triggerPass();
+      this.shakeTimerSec = Math.max(this.shakeTimerSec, 0.65);
+      soundEngine.playPassingTrainWhoosh();
     });
+
+    this.unsubTier3Tear = gameEngine.onTier3Tear(() => {
+      this.glitchTimerSec = 0.42;
+      this.shakeTimerSec = 0.42;
+      soundEngine.playTier3TearGlitch();
+    });
+
+    if (!this.isSoftwareGl) {
+      const composer = new EffectComposer(this.renderer);
+      composer.addPass(new RenderPass(this.scene, this.camera));
+      const glitchPass = new GlitchPass();
+      glitchPass.goWild = true;
+      composer.addPass(glitchPass);
+      composer.addPass(new OutputPass());
+      this.composer = composer;
+      this.glitchPass = glitchPass;
+    }
 
     this.setupLightingPool();
     this.detachInput = playerController.attach(this.renderer.domElement);
@@ -265,6 +319,7 @@ export class SceneRenderer {
     this.camera.fov = computeCameraVerticalFov(aspect);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.composer?.setSize(width, height);
   };
 
   private afterDraw(cb: () => void): void {
@@ -312,6 +367,26 @@ export class SceneRenderer {
 
     const snap = gameEngine.getSnapshot();
     this.syncStationAndRouteSignage();
+    soundEngine.step(clampedDtSec, snap);
+
+    if (this.glitchTimerSec > 0) {
+      this.glitchTimerSec = Math.max(0, this.glitchTimerSec - clampedDtSec);
+    }
+    if (this.shakeTimerSec > 0) {
+      this.shakeTimerSec = Math.max(0, this.shakeTimerSec - clampedDtSec);
+    }
+
+    const baseFov = computeCameraVerticalFov(this.camera.aspect);
+    const breathOffsetDeg = computeBreathingFovOffsetDeg({
+      elapsedSec: this.elapsedSec,
+      sanityTier: snap.sanityTier,
+      falseFlagsCount: snap.falseFlagsCount,
+      reducedEffects,
+    });
+    if (Math.abs(this.camera.fov - (baseFov + breathOffsetDeg)) > 0.02) {
+      this.camera.fov = baseFov + breathOffsetDeg;
+      this.camera.updateProjectionMatrix();
+    }
 
     if (!snap.paused) {
       if (snap.phase === 'menu') {
@@ -347,8 +422,16 @@ export class SceneRenderer {
           reducedEffects ? 0 : Math.sin(this.elapsedSec * 2.5) * 0.0045 * speedNorm;
         const railSwayRoll =
           reducedEffects ? 0 : Math.cos(this.elapsedSec * 1.7) * 0.003 * speedNorm;
+        const shakeOffset =
+          !reducedEffects && this.shakeTimerSec > 0
+            ? Math.sin(this.elapsedSec * 48) * 0.012 * Math.min(1, this.shakeTimerSec * 2)
+            : 0;
 
-        this.camera.position.set(kin.x, kin.y + walkBobY + railSwayY, kin.z);
+        this.camera.position.set(
+          kin.x + shakeOffset,
+          kin.y + walkBobY + railSwayY + shakeOffset * 0.6,
+          kin.z
+        );
         _euler.set(kin.pitch, kin.yaw, railSwayRoll, 'YXZ');
         this.camera.quaternion.setFromEuler(_euler);
 
@@ -390,7 +473,17 @@ export class SceneRenderer {
       }
     }
 
-    this.renderer.render(this.scene, this.camera);
+    if (
+      this.glitchTimerSec > 0 &&
+      this.composer &&
+      this.glitchPass &&
+      !this.isSoftwareGl &&
+      !reducedEffects
+    ) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
 
     if (this.isSoftwareGl) {
       this.afterDraw(() => this.tick(performance.now()));
@@ -420,6 +513,8 @@ export class SceneRenderer {
     window.clearTimeout(this.frameId);
     this.detachInput?.();
     this.unsubPassingTrain?.();
+    this.unsubTier3Tear?.();
+    this.composer?.dispose();
     this.consistRig.dispose();
     this.tunnelRig.dispose();
     this.trestleRig.dispose();

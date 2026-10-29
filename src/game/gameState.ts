@@ -62,6 +62,12 @@ import {
   shouldAnomalyManifest,
   stepFlagHoldProgress,
 } from './anomalyManager';
+import { evaluateUnlockedAchievements } from './achievements';
+import {
+  computeAnomalyAccuracyPercent,
+  computeSanityRetainedPercent,
+  evaluateRideEnding,
+} from './endings';
 import {
   buildEvpTapeRecord,
   clampEvpFrequency,
@@ -93,6 +99,11 @@ import {
   getDeparturePaText,
   getNextStopPaText,
 } from './routeText';
+import {
+  buildTutorialMaskCheck,
+  buildTutorialStepState,
+  TUTORIAL_STRINGS,
+} from './tutorial';
 
 type EngineListener = (snapshot: EngineSnapshot) => void;
 
@@ -248,6 +259,10 @@ class GameEngine {
       rollsign: null,
       subtitle: null,
       selectedExit: null,
+      resolvedEnding: null,
+      sanityRetainedPercent: 100,
+      anomalyAccuracyPercent: 100,
+      tutorialState: null,
       watchingParentLabel: null,
       activeMaskCheck: null,
       paranoidFlashText: null,
@@ -449,6 +464,45 @@ class GameEngine {
         : (patch.lastReactionReason ?? this.snapshot.lastReactionReason),
     };
 
+    const nextSanityRetained =
+      patch.sanityRetainedPercent ??
+      computeSanityRetainedPercent({
+        stopDecisions: this.snapshot.stopDecisions,
+        finalSanity: this.snapshot.sanity,
+        restraintHeld: this.snapshot.restraintHeld,
+      });
+    const nextAnomalyAccuracy =
+      patch.anomalyAccuracyPercent ??
+      computeAnomalyAccuracyPercent(
+        this.snapshot.anomaliesCaughtCount,
+        this.snapshot.anomaliesSpawnedCount
+      );
+    this.snapshot.sanityRetainedPercent = nextSanityRetained;
+    this.snapshot.anomalyAccuracyPercent = nextAnomalyAccuracy;
+
+    if (!this.snapshot.isPracticeRun && !this.snapshot.isDebugRun) {
+      const archive = settingsStore.getArchive();
+      const nextAchievements = evaluateUnlockedAchievements({
+        existingUnlockedIds: archive.unlockedAchievements,
+        documentedAnomaliesCount: archive.documentedAnomalies.length,
+        anomaliesCaughtCount: this.snapshot.anomaliesCaughtCount,
+        rideAnomalies: this.snapshot.rideAnomalies,
+        photos: this.snapshot.photos,
+        tapes: this.snapshot.tapes,
+        hasSecretBroadcasterEvp: this.snapshot.hasSecretBroadcasterEvp,
+        trestleWitnessed: this.snapshot.trestleWitnessed,
+        rideCompleted: this.snapshot.phase === 'end',
+        steppedOffAtBait: this.snapshot.steppedOffAtBait,
+        peakSuspicion: this.snapshot.peakSuspicion,
+        resolvedEnding: this.snapshot.resolvedEnding,
+      });
+      if (nextAchievements.length !== archive.unlockedAchievements.length) {
+        settingsStore.updateArchive({
+          unlockedAchievements: nextAchievements,
+        });
+      }
+    }
+
     if (intervention.intervened) {
       this.subtitleRemainingSec = 4.6;
       this.snapshot.subtitle = {
@@ -525,6 +579,42 @@ class GameEngine {
     }
     const option = check.options[optionIndex];
     if (!option) return;
+
+    if (this.snapshot.phase === 'intro' && this.snapshot.tutorialState) {
+      if (option.isCalm) {
+        this.update({
+          activeMaskCheck: null,
+          watchingParentLabel: null,
+          tutorialState: {
+            ...this.snapshot.tutorialState,
+            feedbackText: TUTORIAL_STRINGS.STEP_2_CALM_FEEDBACK,
+          },
+        });
+        this.showSubtitle(
+          {
+            speaker: 'You',
+            text: option.text,
+            stageDirection: '(Mom nods.)',
+          },
+          3.2
+        );
+      } else {
+        this.update({
+          tutorialState: {
+            ...this.snapshot.tutorialState,
+            feedbackText: TUTORIAL_STRINGS.STEP_2_ODD_FEEDBACK,
+          },
+        });
+        this.showSubtitle(
+          {
+            stageDirection: 'Mom keeps looking at you.',
+            text: TUTORIAL_STRINGS.STEP_2_ODD_FEEDBACK,
+          },
+          3.8
+        );
+      }
+      return;
+    }
 
     if (option.isCalm) {
       this.update({
@@ -1281,6 +1371,98 @@ class GameEngine {
     };
   }
 
+  /**
+   * Starts the interactive 4-step Practice Stretch tutorial (`intro` phase).
+   * "That’s the practice stretch. Nothing in it counted. Your ride to Court Square starts now."
+   */
+  public startPracticeStretch(): void {
+    const isTouch =
+      typeof window !== 'undefined' &&
+      ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    const stickerAnomaly = buildActiveAnomalyInstance('window_residue', () => 0.1);
+    playerController.resetToSeat();
+    pointerLock.clearErrorHint();
+
+    this.update({
+      phase: 'intro',
+      rideSubPhase: 'cruising',
+      paused: false,
+      trainSpeedMps: 12.0,
+      tutorialState: buildTutorialStepState('look_around', isTouch),
+      activeAnomaly: {
+        ...stickerAnomaly,
+        manifested: true,
+      },
+      activeMaskCheck: null,
+      watchingParentLabel: null,
+      isPracticeRun: true,
+      subtitle: {
+        id: 'tutorial-step-1',
+        text: TUTORIAL_STRINGS.STEP_1_BODY,
+      },
+    });
+    this.subtitleRemainingSec = 6.0;
+  }
+
+  /**
+   * Advances to the next step of the interactive Practice Stretch (`look_around` -> `dont_show_it` -> `read_the_doors` -> `ready`).
+   */
+  public advanceTutorialStep(): void {
+    if (this.snapshot.phase !== 'intro' || !this.snapshot.tutorialState) return;
+    const isTouch =
+      typeof window !== 'undefined' &&
+      ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    const cur = this.snapshot.tutorialState.stepId;
+
+    if (cur === 'look_around') {
+      const nextStep = buildTutorialStepState('dont_show_it', isTouch);
+      const maskCheck = buildTutorialMaskCheck();
+      this.update({
+        tutorialState: nextStep,
+        activeAnomaly: null,
+        activeMaskCheck: maskCheck,
+        watchingParentLabel: 'Mom',
+        subtitle: {
+          id: 'tutorial-mom-question',
+          speaker: 'Mom',
+          text: maskCheck.question,
+        },
+      });
+      this.subtitleRemainingSec = 10.0;
+    } else if (cur === 'dont_show_it') {
+      const nextStep = buildTutorialStepState('read_the_doors', isTouch);
+      this.update({
+        tutorialState: nextStep,
+        activeMaskCheck: null,
+        watchingParentLabel: null,
+        subtitle: {
+          id: 'tutorial-doors',
+          text: TUTORIAL_STRINGS.STEP_3_SUMMARY_BODY,
+        },
+      });
+      this.subtitleRemainingSec = 8.0;
+    } else if (cur === 'read_the_doors') {
+      const nextStep = buildTutorialStepState('ready', isTouch);
+      this.update({
+        tutorialState: nextStep,
+        subtitle: {
+          id: 'tutorial-ready',
+          text: TUTORIAL_STRINGS.STEP_4_BODY,
+        },
+      });
+      this.subtitleRemainingSec = 8.0;
+    } else {
+      this.finishPracticeStretch();
+    }
+  }
+
+  /**
+   * Finishes the Practice Stretch and starts a fresh canonical ride to Court Square.
+   */
+  public finishPracticeStretch(): void {
+    this.startRide({ chapter: 1, practice: false });
+  }
+
   public startRide(options?: {
     chapter?: ChapterStartOption;
     nightmare?: boolean;
@@ -1367,6 +1549,10 @@ class GameEngine {
         isPa: true,
       },
       selectedExit: null,
+      resolvedEnding: null,
+      sanityRetainedPercent: 100,
+      anomalyAccuracyPercent: 100,
+      tutorialState: null,
       watchingParentLabel: null,
       activeMaskCheck: null,
       paranoidFlashText: null,
@@ -1545,9 +1731,26 @@ class GameEngine {
     // If an anomaly manifested on this stretch and was NOT caught, apply SANITY_DELTAS.MISS (-5)
     const missedActiveAnomaly =
       this.snapshot.activeAnomaly?.manifested && !this.snapshot.activeAnomaly.caught;
+    const caughtActiveAnomaly = Boolean(
+      this.snapshot.activeAnomaly?.manifested && this.snapshot.activeAnomaly.caught
+    );
     const nextSanity = missedActiveAnomaly
       ? this.snapshot.sanity + SANITY_DELTAS.MISS
       : this.snapshot.sanity;
+
+    if (
+      caughtActiveAnomaly &&
+      settingsStore.get().vibrateOnCatch &&
+      !settingsStore.isReducedEffectsActive() &&
+      typeof navigator !== 'undefined' &&
+      typeof navigator.vibrate === 'function'
+    ) {
+      try {
+        navigator.vibrate(35);
+      } catch {
+        // Ignore vibrate errors in restricted contexts
+      }
+    }
 
     this.update({
       phase: 'stop',
@@ -1696,6 +1899,52 @@ class GameEngine {
 
     // False Stop Trial room phase
     if (this.snapshot.phase === 'trial') {
+      if (bannerChanged) this.emit();
+      return;
+    }
+
+    // Practice Stretch tutorial phase ('intro')
+    if (this.snapshot.phase === 'intro') {
+      if (this.snapshot.isFlagHolding || this.snapshot.flagHoldProgress > 0) {
+        const camY = playerController.getState().y || 1.24;
+        const lookingAtActive = isLookingAtAnomaly(
+          this.snapshot.activeAnomaly,
+          this.snapshot.playerX,
+          camY,
+          this.snapshot.playerZ,
+          this.snapshot.playerYaw,
+          this.snapshot.playerPitch
+        );
+        const flagStep = stepFlagHoldProgress({
+          isHolding: this.snapshot.isFlagHolding,
+          currentProgress: this.snapshot.flagHoldProgress,
+          dtSec,
+          lookingAtActiveAnomaly: lookingAtActive,
+        });
+        this.snapshot.flagHoldProgress = Number(flagStep.nextProgress.toFixed(2));
+        bannerChanged = true;
+
+        if (flagStep.completedCatch) {
+          this.catchActiveAnomaly(false);
+          if (this.snapshot.tutorialState) {
+            this.update({
+              tutorialState: {
+                ...this.snapshot.tutorialState,
+                feedbackText: TUTORIAL_STRINGS.STEP_1_CAUGHT_FEEDBACK,
+              },
+            });
+          }
+        } else if (flagStep.completedFalseFlag && this.snapshot.tutorialState) {
+          this.update({
+            isFlagHolding: false,
+            flagHoldProgress: 0,
+            tutorialState: {
+              ...this.snapshot.tutorialState,
+              feedbackText: TUTORIAL_STRINGS.STEP_1_MISS_FEEDBACK,
+            },
+          });
+        }
+      }
       if (bannerChanged) this.emit();
       return;
     }
@@ -2227,12 +2476,51 @@ class GameEngine {
 
     // Stop 12 (21 St) False Stop Bait: stepping off ends the ride with Ending #2: The Eternal Commute
     if (seg.stopType === 'bait') {
+      this.recordStopDecision(seg, true);
       pointerLock.unlock({ quiet: true });
+
+      const sanityRetainedPercent = computeSanityRetainedPercent({
+        stopDecisions: this.snapshot.stopDecisions,
+        finalSanity: this.snapshot.sanity,
+        restraintHeld: this.snapshot.restraintHeld,
+      });
+      const anomalyAccuracyPercent = computeAnomalyAccuracyPercent(
+        this.snapshot.anomaliesCaughtCount,
+        this.snapshot.anomaliesSpawnedCount
+      );
+      const resolvedEnding = evaluateRideEnding({
+        route,
+        selectedExit: null,
+        peakSuspicion: this.snapshot.peakSuspicion,
+        sanityRetainedPercent,
+        anomalyAccuracyPercent,
+        tapesCount: this.snapshot.tapes.length,
+        hasConductorOnTape: this.snapshot.hasConductorEvp,
+        restraintHeld: this.snapshot.restraintHeld,
+        falseStopTrialsCount: this.snapshot.falseStopTrials.length,
+        interventionsCount: this.snapshot.interventionsCount,
+        steppedOffAtBait: true,
+      });
+
+      if (!this.snapshot.isPracticeRun && !this.snapshot.isDebugRun) {
+        const archive = settingsStore.getArchive();
+        const nextDocEndings = archive.documentedEndings.includes(resolvedEnding.id)
+          ? archive.documentedEndings
+          : [...archive.documentedEndings, resolvedEnding.id];
+        settingsStore.updateArchive({
+          finishedRides: archive.finishedRides + 1,
+          documentedEndings: nextDocEndings,
+        });
+      }
+
       this.update({
         phase: 'end',
         paused: false,
         trainSpeedMps: 0,
         steppedOffAtBait: true,
+        resolvedEnding,
+        sanityRetainedPercent,
+        anomalyAccuracyPercent,
         cameraOpen: false,
         evpOpen: false,
         evpIsRecording: false,
@@ -2243,13 +2531,9 @@ class GameEngine {
         subtitle: {
           id: 'bait-eternal-commute',
           speaker: 'Mom',
-          text: formatRouteText(
-            'The doors open. The sign says {origin}. Mom stands up and smooths her coat. “This is us,” she says.',
-            route
-          ),
+          text: resolvedEnding.narrativeText,
         },
       });
-      this.recordStopDecision(seg, true);
       return;
     }
 
@@ -2284,10 +2568,37 @@ class GameEngine {
           ? 'You drift toward the side stairs. The hiss in your pocket gets louder.'
           : 'You lean on the emergency bar. Somewhere above, the air is moving.';
 
+    const sanityRetainedPercent = computeSanityRetainedPercent({
+      stopDecisions: this.snapshot.stopDecisions,
+      finalSanity: this.snapshot.sanity,
+      restraintHeld: this.snapshot.restraintHeld,
+    });
+    const anomalyAccuracyPercent = computeAnomalyAccuracyPercent(
+      this.snapshot.anomaliesCaughtCount,
+      this.snapshot.anomaliesSpawnedCount
+    );
+    const resolvedEnding = evaluateRideEnding({
+      route: this.snapshot.activeRoute,
+      selectedExit: choice,
+      peakSuspicion: this.snapshot.peakSuspicion,
+      sanityRetainedPercent,
+      anomalyAccuracyPercent,
+      tapesCount: this.snapshot.tapes.length,
+      hasConductorOnTape: this.snapshot.hasConductorEvp,
+      restraintHeld: this.snapshot.restraintHeld,
+      falseStopTrialsCount: this.snapshot.falseStopTrials.length,
+      interventionsCount: this.snapshot.interventionsCount,
+      steppedOffAtBait: this.snapshot.steppedOffAtBait,
+    });
+
     if (!this.snapshot.isPracticeRun && !this.snapshot.isDebugRun) {
       const archive = settingsStore.getArchive();
+      const nextDocEndings = archive.documentedEndings.includes(resolvedEnding.id)
+        ? archive.documentedEndings
+        : [...archive.documentedEndings, resolvedEnding.id];
       settingsStore.updateArchive({
         finishedRides: archive.finishedRides + 1,
+        documentedEndings: nextDocEndings,
       });
     }
 
@@ -2296,6 +2607,9 @@ class GameEngine {
       paused: false,
       trainSpeedMps: 0,
       selectedExit: choice,
+      resolvedEnding,
+      sanityRetainedPercent,
+      anomalyAccuracyPercent,
       cameraOpen: false,
       evpOpen: false,
       evpIsRecording: false,
@@ -2333,6 +2647,10 @@ class GameEngine {
       rollsign: null,
       subtitle: null,
       selectedExit: null,
+      resolvedEnding: null,
+      sanityRetainedPercent: 100,
+      anomalyAccuracyPercent: 100,
+      tutorialState: null,
       watchingParentLabel: null,
       activeMaskCheck: null,
       paranoidFlashText: null,

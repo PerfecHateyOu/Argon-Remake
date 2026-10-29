@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnalogRollsign } from './components/AnalogRollsign';
+import { CaseFilesModal } from './components/CaseFilesModal';
 import { EvpRecorder } from './components/EvpRecorder';
+import { HeartbeatTrace } from './components/HeartbeatTrace';
 import { MoveStick } from './components/MoveStick';
 import { PolaroidAlbum } from './components/PolaroidAlbum';
 import { PolaroidViewfinder } from './components/PolaroidViewfinder';
+import { ReportScreen } from './components/ReportScreen';
 import { RouteSelector } from './components/RouteSelector';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StartScreen } from './components/StartScreen';
+import { TutorialCoach } from './components/TutorialCoach';
 import { ROUTE_METADATA } from './constants';
 import { gameEngine } from './game/gameState';
-import { PSYCH_IDS, resolvePsychLogCatalog } from './game/psychLog';
 import { formatRouteText } from './game/routeText';
 import { SceneRenderer } from './graphics/sceneRenderer';
 import { playerController } from './input/keyLook';
@@ -154,7 +157,7 @@ export default function App() {
 
       if (
         (e.key === 'f' || e.key === 'F' || e.code === 'KeyF') &&
-        snapshot.phase === 'ride' &&
+        (snapshot.phase === 'ride' || snapshot.phase === 'intro') &&
         !snapshot.paused
       ) {
         e.preventDefault();
@@ -167,6 +170,16 @@ export default function App() {
           return;
         }
         gameEngine.setFlagHolding(true);
+        return;
+      }
+
+      if (e.key === 'Enter' && snapshot.phase === 'intro' && !snapshot.paused) {
+        e.preventDefault();
+        if (snapshot.tutorialState?.stepId === 'ready') {
+          gameEngine.finishPracticeStretch();
+        } else {
+          gameEngine.advanceTutorialStep();
+        }
         return;
       }
 
@@ -318,6 +331,9 @@ export default function App() {
               void pointerLock.lock(canvas);
             }
           }}
+          onPracticeStretch={() => {
+            gameEngine.startPracticeStretch();
+          }}
           onToggleNightmare={(enabled) => gameEngine.setNightmareMode(enabled)}
           onSelectChapter={(chapter) => gameEngine.setStartChapter(chapter)}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -394,6 +410,8 @@ export default function App() {
                   {snapshot.sanityTier} · Suspicion: {snapshot.suspicion}/60 · {snapshot.fps} FPS
                 </div>
               </button>
+
+              <HeartbeatTrace sanityTier={snapshot.sanityTier} sanity={snapshot.sanity} />
 
               {snapshot.watchingParentLabel && (
                 <div
@@ -537,6 +555,15 @@ export default function App() {
             <MoveStick onMove={(x, y) => playerController.setMoveStickInput(x, y)} />
 
             <div className="flex flex-col items-center gap-2.5 mx-auto max-w-2xl w-full">
+              {/* Interactive Practice Stretch Tutorial Coach */}
+              {snapshot.phase === 'intro' && snapshot.tutorialState && !snapshot.paused && (
+                <TutorialCoach
+                  tutorialState={snapshot.tutorialState}
+                  onAdvanceStep={() => gameEngine.advanceTutorialStep()}
+                  onFinishTutorial={() => gameEngine.finishPracticeStretch()}
+                />
+              )}
+
               {/* Stop 11 Greenpoint Av Restraint Moment */}
               {snapshot.activeRestraint?.active && !snapshot.paused && (
                 <div
@@ -927,76 +954,15 @@ export default function App() {
         onTogglePlayTape={(tapeId) => gameEngine.toggleTapePlayback(tapeId)}
       />
 
-      {/* End of Ride Summary Overlay (Milestone 3/6 arrival; expanded to full ReportScreen in Milestone 8) */}
+      {/* Post-Ride Report Screen */}
       {snapshot.phase === 'end' && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Ride Complete"
-          data-testid="end-screen"
-          className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-[#040504]/90 pointer-events-auto"
-        >
-          <div className="w-full max-w-lg border border-[#e6e2d8]/25 bg-[#0b0d0b] p-6 space-y-4">
-            <div className="text-xs font-mono uppercase tracking-widest text-[#ffcf8a]">
-              {snapshot.steppedOffAtBait
-                ? '[LOOP: THE ETERNAL COMMUTE]'
-                : `[TERMINUS REACHED · ${snapshot.currentStationName.toUpperCase()}]`}
-            </div>
-            <h2 className="text-xl font-bold text-[#fff0d4]">
-              {snapshot.steppedOffAtBait
-                ? 'The Eternal Commute'
-                : `Here we are. ${snapshot.currentStationName}.`}
-            </h2>
-            {snapshot.subtitle && (
-              <p className="text-sm italic text-[#c8c3b8]">{snapshot.subtitle.text}</p>
-            )}
-            <div className="border-t border-[#e6e2d8]/15 pt-3 text-xs font-mono text-[#9e9a90] space-y-1">
-              <div>Route Line: {currentRoute.name}</div>
-              <div>
-                Final Sanity: {snapshot.sanity} ({snapshot.sanityTier})
-              </div>
-              <div>Peak Suspicion: {snapshot.peakSuspicion}</div>
-              <div>
-                Anomalies Caught: {snapshot.anomaliesCaughtCount} of{' '}
-                {snapshot.anomaliesSpawnedCount}
-              </div>
-              <div>
-                Restraint (Stop 11):{' '}
-                {snapshot.restraintHeld
-                  ? `Held (+${snapshot.restraintCeilingBonus} ceiling bonus)`
-                  : snapshot.restraintCompleted
-                    ? 'Failed'
-                    : 'Not reached'}
-              </div>
-              <div>
-                False Stop Trials:{' '}
-                {snapshot.falseStopTrials.length === 0
-                  ? 'None. You never stepped off into a trap.'
-                  : snapshot.falseStopTrials
-                      .map((t) => `Stop ${t.stop} (${t.depth} loops deep)`)
-                      .join(', ')}
-              </div>
-            </div>
-            <div className="flex items-center gap-3 pt-2">
-              <button
-                type="button"
-                data-testid="play-again-button"
-                onClick={() => gameEngine.startRide()}
-                className="flex-1 py-2.5 bg-[#fff0d4] text-[#040504] text-sm font-semibold hover:bg-[#ffcf8a] cursor-pointer"
-              >
-                {snapshot.steppedOffAtBait ? 'Get back on' : 'Ride again'}
-              </button>
-              <button
-                type="button"
-                data-testid="return-title-button"
-                onClick={() => gameEngine.returnToMenu()}
-                className="flex-1 py-2.5 border border-[#e6e2d8]/30 text-sm text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
-              >
-                Return to title
-              </button>
-            </div>
-          </div>
-        </div>
+        <ReportScreen
+          snapshot={snapshot}
+          archive={archive}
+          onPlayAgain={() => gameEngine.startRide()}
+          onOpenCaseFiles={() => setCaseFilesOpen(true)}
+          onReturnToTitle={() => gameEngine.returnToMenu()}
+        />
       )}
 
       {/* Pause Modal */}
@@ -1071,103 +1037,19 @@ export default function App() {
         />
       )}
 
-      {/* Case Files Modal (Psych Log Anomalies Catalog) */}
-      {caseFilesOpen &&
-        (() => {
-          const psychCatalog = resolvePsychLogCatalog(archive, snapshot.rideAnomalies);
-          const hasAnyWitnessed =
-            psychCatalog.documentedCount > 0 || psychCatalog.unconfirmedCount > 0;
-          return (
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Case Files"
-              data-testid="case-files-modal"
-              className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-[#040504]/90 pointer-events-auto"
-            >
-              <div className="w-full max-w-2xl max-h-[85vh] flex flex-col border border-[#e6e2d8]/25 bg-[#0b0d0b] p-6 space-y-4">
-                <div className="flex items-center justify-between border-b border-[#e6e2d8]/15 pb-3 shrink-0">
-                  <div>
-                    <h2 className="text-lg font-semibold text-[#fff0d4]">Case Files</h2>
-                    <div className="text-xs font-mono text-[#ffcf8a]">
-                      {psychCatalog.documentedCount} of {PSYCH_IDS.length} documented,{' '}
-                      {psychCatalog.unconfirmedCount} unconfirmed
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    data-testid="close-case-files-button"
-                    onClick={() => setCaseFilesOpen(false)}
-                    className="px-3 py-1.5 border border-[#e6e2d8]/30 text-xs text-[#e6e2d8] hover:border-[#fff0d4] cursor-pointer"
-                  >
-                    Close Case Files
-                  </button>
-                </div>
-
-                {!hasAnyWitnessed && (
-                  <p className="text-sm text-[#c8c3b8]">
-                    Nothing witnessed yet. Anomalies you see on a ride are filed here.
-                  </p>
-                )}
-
-                <div className="overflow-y-auto space-y-2.5 pr-1">
-                  {psychCatalog.entries.map((entry) => {
-                    const { definition, status } = entry;
-                    const isDoc = status === 'DOCUMENTED';
-                    const isUnconf = status === 'UNCONFIRMED';
-                    return (
-                      <div
-                        key={definition.id}
-                        data-testid={`psych-entry-${definition.id}`}
-                        className="border border-[#e6e2d8]/15 bg-[#080a08] p-3.5 space-y-1.5"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-xs font-semibold text-[#fff0d4]">
-                            {isDoc || isUnconf ? (
-                              <>
-                                #{definition.index} · {definition.title}{' '}
-                                <span className="font-mono text-[#9e9a90]">
-                                  (Class {definition.psychClass})
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-[#9e9a90]">
-                                #{definition.index} · Class {definition.psychClass}, not yet
-                                witnessed
-                              </span>
-                            )}
-                          </div>
-                          <span
-                            className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider border ${
-                              isDoc
-                                ? 'border-[#ffcf8a]/60 text-[#ffcf8a] bg-[#ffcf8a]/10'
-                                : isUnconf
-                                  ? 'border-[#e6e2d8]/30 text-[#c8c3b8]'
-                                  : 'border-[#e6e2d8]/15 text-[#78746c]'
-                            }`}
-                          >
-                            {status}
-                          </span>
-                        </div>
-
-                        {isDoc && (
-                          <p className="text-xs text-[#c8c3b8] leading-relaxed">
-                            {definition.caseFileNote}
-                          </p>
-                        )}
-                        {isUnconf && (
-                          <p className="text-xs italic text-[#9e9a90]">
-                            Seen, not flagged in time.
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+      {/* Case Files Modal (Anomalies, Polaroids & Tapes, Endings, Achievements) */}
+      <CaseFilesModal
+        open={caseFilesOpen}
+        archive={archive}
+        rideAnomalies={snapshot.rideAnomalies}
+        photos={snapshot.photos}
+        tapes={snapshot.tapes}
+        activeRoute={snapshot.activeRoute}
+        playingTapeId={snapshot.playingTapeId}
+        onClose={() => setCaseFilesOpen(false)}
+        onOpenCamera={() => gameEngine.toggleCamera(true)}
+        onTogglePlayTape={(tapeId) => gameEngine.toggleTapePlayback(tapeId)}
+      />
 
       {/* Settings Panel Modal */}
       {settingsOpen && (

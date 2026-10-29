@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "build:offline": "node scripts/build-offline.mjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist dist-offline Last-Local-offline.zip server.js",
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
