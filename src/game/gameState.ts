@@ -1138,13 +1138,15 @@ class GameEngine {
 
   /**
    * Plays or stops a recorded EVP tape in the Evidence Log or HUD.
-   * Playing a tape out loud adds +10 Suspicion once, plus 50% chance an unwatching parent turns to look.
+   * Playing a tape out loud adds +10 Suspicion only if a parent is already watching when the tape starts;
+   * if no parent is watching, there is a 50% chance one turns to look.
    */
   public toggleTapePlayback(tapeId: EvpSignalId): void {
     const isAlreadyPlaying = this.snapshot.playingTapeId === tapeId;
     const nextPlaying = isAlreadyPlaying ? null : tapeId;
 
     const watcher = this.snapshot.watchingParentLabel;
+    const playedWhileWatched = Boolean(nextPlaying && watcher);
     let nextWatcher = watcher;
     if (nextPlaying && !watcher && Math.random() < 0.5) {
       nextWatcher = this.forceParentLook();
@@ -1153,15 +1155,11 @@ class GameEngine {
     this.update({
       playingTapeId: nextPlaying,
       watchingParentLabel: nextWatcher,
-      suspicion: nextPlaying
+      suspicion: playedWhileWatched
         ? this.snapshot.suspicion + SUSPICION_DELTAS.TAPE_PLAYED_WATCHED
         : this.snapshot.suspicion,
-      lastReactionReason: nextPlaying
-        ? watcher
-          ? `Played a tape out loud while ${watcher} was watching`
-          : nextWatcher
-            ? `Played a tape out loud while ${nextWatcher} was watching`
-            : 'Played a tape out loud'
+      lastReactionReason: playedWhileWatched
+        ? `Played a tape out loud while ${watcher} was watching`
         : this.snapshot.lastReactionReason,
     });
   }

@@ -37,7 +37,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 'a_passenger',
     frequencyMhz: 83,
-    stops: [6, 7, 8],
+    stops: [7, 8, 9],
     titleTemplate: 'A passenger',
     transcriptTemplate:
       '…I got on at {originShort} too. I always get on at {originShort}. I always get on at {originShort}…',
@@ -48,7 +48,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 'dispatch_no_train',
     frequencyMhz: 92,
-    stops: [8, 9, 10],
+    stops: [9, 10],
     titleTemplate: 'Dispatch, no train number',
     transcriptTemplate:
       '…there is no train scheduled on this track. Repeat: nothing is scheduled on this track…',
@@ -59,7 +59,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 'someone_far_end',
     frequencyMhz: 101,
-    stops: [9, 10, 11],
+    stops: [10, 11],
     titleTemplate: 'Someone at the far end',
     transcriptTemplate:
       '…first time? It gets easier after {s11}. Don’t let them see you looking…',
@@ -70,7 +70,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 'static_then_time',
     frequencyMhz: 110,
-    stops: [10, 11, 12],
+    stops: [11, 12],
     titleTemplate: 'Static, then a time',
     transcriptTemplate: '…6:52… 6:52 a.m.… it was 6:52 the last time, too…',
     isCarrierOnly: false,
@@ -114,7 +114,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 's4_phantom_pa',
     frequencyMhz: 146,
-    stops: [6, 7, 8, 9],
+    stops: [6, 7, 8],
     titleTemplate: '{s4} phantom PA echo',
     transcriptTemplate:
       '…Please stand clear of the closing doors… the train following this one does not exist… return to your seat immediately…',
@@ -125,7 +125,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 's7_night_wiretap',
     frequencyMhz: 155,
-    stops: [7, 8, 9, 10],
+    stops: [7, 8, 9],
     titleTemplate: '{s7} night wiretap',
     transcriptTemplate:
       '…Station log 02:14. Platform empty, but footsteps continue down the south stairs. Someone is whistling the wrong chime…',
@@ -136,7 +136,7 @@ export const EVP_STATION_SPECS: EvpStationSpec[] = [
   {
     id: 'emergency_channel',
     frequencyMhz: 164,
-    stops: [11, 12, 13],
+    stops: [10, 11, 12],
     titleTemplate: 'Newtown Creek emergency channel',
     altTitleTemplate: 'Track emergency channel',
     transcriptTemplate:

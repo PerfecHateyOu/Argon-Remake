@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { strToU8, zipSync } from 'fflate';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -66,14 +67,21 @@ Open index.html directly in any modern desktop or mobile browser. No internet co
 const readmePath = path.join(outDir, 'README.txt');
 fs.writeFileSync(readmePath, readmeText, 'utf8');
 
-// 4. Package index.html + README.txt into Last-Local-offline.zip
+// 4. Package index.html + README.txt into Last-Local-offline.zip in Node
 const rootZipPath = path.join(rootDir, 'Last-Local-offline.zip');
 const distZipPath = path.join(distDir, 'Last-Local-offline.zip');
 
 if (fs.existsSync(rootZipPath)) fs.unlinkSync(rootZipPath);
 if (fs.existsSync(distZipPath)) fs.unlinkSync(distZipPath);
 
-execFileSync('zip', ['-q', '-j', rootZipPath, htmlPath, readmePath]);
+const zipBytes = zipSync(
+  {
+    'index.html': new Uint8Array(fs.readFileSync(htmlPath)),
+    'README.txt': strToU8(readmeText),
+  },
+  { level: 9 }
+);
+fs.writeFileSync(rootZipPath, zipBytes);
 fs.copyFileSync(rootZipPath, distZipPath);
 
 console.log(
