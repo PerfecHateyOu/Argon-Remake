@@ -66,7 +66,7 @@ export const PolaroidViewfinder: React.FC<PolaroidViewfinderProps> = ({
               data-testid="polaroid-snap-button"
               disabled={outOfFilm}
               onClick={onSnap}
-              className={`flex items-center gap-2 px-4 py-2 text-xs font-mono uppercase tracking-[0.14em] font-semibold transition-colors cursor-pointer ${
+              className={`min-h-[44px] min-w-[44px] flex items-center gap-2 px-4 py-2 text-xs font-mono uppercase tracking-[0.14em] font-semibold transition-colors cursor-pointer ${
                 outOfFilm
                   ? 'bg-[#1a1d1a] text-[#f2efe9]/40 border border-[#f2efe9]/15 cursor-not-allowed'
                   : 'bg-[#ffcf8a] text-[#0a0c0a] hover:bg-[#ffdca8]'
@@ -80,7 +80,7 @@ export const PolaroidViewfinder: React.FC<PolaroidViewfinderProps> = ({
               type="button"
               data-testid="polaroid-lower-button"
               onClick={onLower}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-mono uppercase tracking-[0.12em] bg-[#121613] hover:bg-[#1c221e] text-[#f2efe9]/85 border border-[#f2efe9]/20 transition-colors cursor-pointer"
+              className="min-h-[44px] min-w-[44px] flex items-center gap-1.5 px-3 py-2 text-xs font-mono uppercase tracking-[0.12em] bg-[#121613] hover:bg-[#1c221e] text-[#f2efe9]/85 border border-[#f2efe9]/20 transition-colors cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
               <span>Lower Camera</span>

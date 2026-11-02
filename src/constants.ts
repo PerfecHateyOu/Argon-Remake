@@ -5,9 +5,21 @@ import type { AdCopyDefinition, RouteLineId, SegmentRule, SettingsState } from '
  */
 
 export const FORWARD_X = -1 as const;
+export const DOOR_TUBE_IDX = 1 as const;
+export const DOOR_LIGHT_IDX = 4 as const;
 
 export const STORAGE_KEYS = {
-  SETTINGS: 'last_local_v1_settings',
+  SETTINGS: 'gtrain-settings',
+  ACHIEVEMENTS: 'gtrain-achievements',
+  ENDINGS: 'gtrain-endings',
+  ENDINGS_ARCHIVE: 'courtSq_endingsArchive',
+  RUNS: 'gtrain-runs',
+  POLAROIDS: 'gtrain-polaroids',
+  TAPES: 'gtrain-tapes',
+  PSYCHLOG: 'gtrain-psychlog',
+  TUTORIAL: 'gtrain-tutorial',
+  HAPTICS: 'gtrain-haptics',
+  ANNOUNCEMENT: 'last-local-announcement',
   ARCHIVE: 'last_local_v1_archive',
 } as const;
 

@@ -1,28 +1,25 @@
 import * as THREE from 'three';
 import {
-  ADS_ACROSS_AISLE,
-  ADS_NEAR_SEAT,
   CAR_CENTERS_X,
   CAR_HEIGHT,
   CAR_LENGTH,
   CAR_WIDTH,
-  FLUORESCENT_LIGHT_COLOR,
+  DOOR_TUBE_IDX,
   GANGWAY_CENTERS_X,
   GANGWAY_DOOR_TRIGGER_DIST_X,
   GANGWAY_HEIGHT,
-  GANGWAY_LENGTH,
   GANGWAY_WIDTH,
+  ROUTE_METADATA,
 } from '../constants';
+import type { ActiveAnomalyInstance, RouteLineId } from '../types';
 import {
-  createAdTexture,
+  applyCarAnomalyToMeshes,
+  createConsistMaterialsAndGeometries,
+} from './subwayCarAnomalies';
+import {
   createCarNumberPlateTexture,
   createRouteMapTexture,
-  createSpeckledFloorTexture,
-  createWindowResidueTexture,
 } from './textureGenerator';
-
-import { ROUTE_METADATA } from '../constants';
-import type { ActiveAnomalyInstance, RouteLineId } from '../types';
 
 export interface GangwayDoorRig {
   centerX: number;
@@ -46,6 +43,7 @@ export interface SubwayConsistRig {
   sideDoorsLeft: THREE.Mesh[];
   sideDoorsRight: THREE.Mesh[];
   ceilingTubes: THREE.Mesh[];
+  lightSegs: THREE.Mesh[];
   adMeshes: THREE.Mesh[];
   routeMapMeshes: THREE.Mesh[];
   updateGangwayDoors: (playerX: number, dtSec: number) => void;
@@ -60,146 +58,40 @@ export interface SubwayConsistRig {
   dispose: () => void;
 }
 
-
 /**
  * Builds the procedural 3-car consist:
  * - Car A (lead, x ≈ -19.5)
  * - Car B (mid, x ≈ 0)
  * - Car C (rear, x ≈ +19.5)
  * - 2 Gangway bellows & sliding doors between A↔B (x = -9.75) and B↔C (x = +9.75)
- * Shares geometries and materials across cars for minimal memory and draw calls.
+ * Isolates `lightSegs[DOOR_TUBE_IDX]` (`DOOR_TUBE_IDX = 1` at `x = -4.5` in Car B) so arrival door-tick
+ * flickers ONLY that single fluorescent tube nearest the doors while all other tubes stay steady.
  */
 export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
   const root = new THREE.Group();
-  const geometries: THREE.BufferGeometry[] = [];
-  const materials: THREE.Material[] = [];
-  const textures: THREE.Texture[] = [];
-
-  const gangwayDoors: GangwayDoorRig[] = [];
-  const sideDoorPairs: SideDoorPairRig[] = [];
-  const sideDoorsLeft: THREE.Mesh[] = [];
-  const sideDoorsRight: THREE.Mesh[] = [];
-  const ceilingTubes: THREE.Mesh[] = [];
-  const adMeshes: THREE.Mesh[] = [];
-  const routeMapMeshes: THREE.Mesh[] = [];
-
-  // Shared PBR Materials
-  const floorTex = createSpeckledFloorTexture(maxAnisotropy);
-  textures.push(floorTex);
-
-  const floorMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: floorTex,
-    roughness: 0.84,
-    metalness: 0.08,
-  });
-
-  const ceilingMat = new THREE.MeshStandardMaterial({
-    color: 0xd8d2c5,
-    roughness: 0.62,
-    metalness: 0.08,
-  });
-
-  const wallMelamineMat = new THREE.MeshStandardMaterial({
-    color: 0xcbc4b4,
-    roughness: 0.56,
-    metalness: 0.1,
-  });
-
-  const lowerWallTrimMat = new THREE.MeshStandardMaterial({
-    color: 0x262928,
-    roughness: 0.72,
-    metalness: 0.18,
-  });
-
-  const stainlessSteelMat = new THREE.MeshStandardMaterial({
-    color: 0xcfd4d8,
-    roughness: 0.24,
-    metalness: 0.88,
-  });
-
-  const benchShellMat = new THREE.MeshStandardMaterial({
-    color: 0x2e4252,
-    roughness: 0.48,
-    metalness: 0.14,
-  });
-
-  const benchSeatDivideMat = new THREE.MeshStandardMaterial({
-    color: 0x1e2c38,
-    roughness: 0.58,
-    metalness: 0.12,
-  });
-
-  const doorMetalMat = new THREE.MeshStandardMaterial({
-    color: 0x9aa0a6,
-    roughness: 0.36,
-    metalness: 0.68,
-  });
-
-  const windowGlassMat = new THREE.MeshStandardMaterial({
-    color: 0x06090b,
-    roughness: 0.14,
-    metalness: 0.25,
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-  });
-
-  const tubeWarmMat = new THREE.MeshStandardMaterial({
-    color: FLUORESCENT_LIGHT_COLOR,
-    emissive: FLUORESCENT_LIGHT_COLOR,
-    emissiveIntensity: 1.45,
-    roughness: 0.28,
-  });
-
-  const bellowsRubberMat = new THREE.MeshStandardMaterial({
-    color: 0x141615,
-    roughness: 0.88,
-    metalness: 0.06,
-  });
-
-  materials.push(
+  const shared = createConsistMaterialsAndGeometries(maxAnisotropy);
+  const {
+    geometries,
+    materials,
+    textures,
     floorMat,
     ceilingMat,
     wallMelamineMat,
     lowerWallTrimMat,
     stainlessSteelMat,
     benchShellMat,
-    benchSeatDivideMat,
     doorMetalMat,
     windowGlassMat,
     tubeWarmMat,
-    bellowsRubberMat
-  );
-
-  // Shared Geometries (with lower wall split around the two 1.36m side doorways at x = ±5.0)
-  const floorGeo = new THREE.BoxGeometry(CAR_LENGTH, 0.08, CAR_WIDTH);
-  const ceilingGeo = new THREE.BoxGeometry(CAR_LENGTH, 0.08, CAR_WIDTH);
-  const lowerWallEndGeo = new THREE.BoxGeometry(3.12, 0.90, 0.06);
-  const lowerWallMidGeo = new THREE.BoxGeometry(8.64, 0.90, 0.06);
-  const upperHeaderWallGeo = new THREE.BoxGeometry(CAR_LENGTH, 0.50, 0.06);
-  const windowPillarGeo = new THREE.BoxGeometry(0.28, 1.02, 0.06);
-  const windowGlassGeo = new THREE.PlaneGeometry(1.75, 1.0);
-  const sideDoorLeafGeo = new THREE.BoxGeometry(0.68, 1.92, 0.04);
-  const bulkheadWallGeo = new THREE.BoxGeometry(0.09, CAR_HEIGHT, (CAR_WIDTH - GANGWAY_WIDTH) / 2);
-  const bulkheadHeaderGeo = new THREE.BoxGeometry(0.09, CAR_HEIGHT - GANGWAY_HEIGHT, GANGWAY_WIDTH);
-  const gangwayDoorLeafGeo = new THREE.BoxGeometry(0.05, GANGWAY_HEIGHT - 0.04, GANGWAY_WIDTH / 2 + 0.04);
-
-  const benchBaseGeo = new THREE.BoxGeometry(3.4, 0.44, 0.48);
-  const benchBackGeo = new THREE.BoxGeometry(3.4, 0.46, 0.08);
-  const poleVertGeo = new THREE.CylinderGeometry(0.022, 0.022, CAR_HEIGHT - 0.08, 12);
-  const poleHorizGeo = new THREE.CylinderGeometry(0.018, 0.018, CAR_LENGTH - 1.2, 10);
-  poleHorizGeo.rotateZ(Math.PI / 2);
-
-  const tubeDiffuserGeo = new THREE.BoxGeometry(2.6, 0.045, 0.2);
-  const adPlaneGeo = new THREE.PlaneGeometry(1.42, 0.38);
-  const routeMapPlaneGeo = new THREE.PlaneGeometry(2.15, 0.38);
-  const numberPlateGeo = new THREE.PlaneGeometry(0.56, 0.22);
-
-  const bellowsRibGeo = new THREE.BoxGeometry(0.14, GANGWAY_HEIGHT + 0.16, GANGWAY_WIDTH + 0.24);
-  const gangwayFloorGeo = new THREE.BoxGeometry(GANGWAY_LENGTH + 0.2, 0.08, GANGWAY_WIDTH + 0.12);
-
-  geometries.push(
+    doorTubeMat,
+    tubeColdBlueMat,
+    bellowsRubberMat,
+    routeMapMat,
+    residueMat,
+    stickerTex,
+    stainTex,
+    acrossAdMaterials,
+    nearAdMaterials,
     floorGeo,
     ceilingGeo,
     lowerWallEndGeo,
@@ -220,54 +112,18 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     routeMapPlaneGeo,
     numberPlateGeo,
     bellowsRibGeo,
-    gangwayFloorGeo
-  );
+    gangwayFloorGeo,
+    residueGeo,
+  } = shared;
 
-  // Pre-build Ad & Route Map Materials (with polygonOffset to prevent coplanar Z-fighting)
-  const acrossAdMaterials = ADS_ACROSS_AISLE.map((ad) => {
-    const tex = createAdTexture(ad, maxAnisotropy);
-    textures.push(tex);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: tex,
-      roughness: 0.42,
-      metalness: 0.06,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    materials.push(mat);
-    return { ad, mat };
-  });
-
-  const nearAdMaterials = ADS_NEAR_SEAT.map((ad) => {
-    const tex = createAdTexture(ad, maxAnisotropy);
-    textures.push(tex);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: tex,
-      roughness: 0.42,
-      metalness: 0.06,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    materials.push(mat);
-    return { ad, mat };
-  });
-
-  const routeMapTex = createRouteMapTexture(maxAnisotropy);
-  textures.push(routeMapTex);
-  const routeMapMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: routeMapTex,
-    roughness: 0.38,
-    metalness: 0.05,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
-  });
-  materials.push(routeMapMat);
+  const gangwayDoors: GangwayDoorRig[] = [];
+  const sideDoorPairs: SideDoorPairRig[] = [];
+  const sideDoorsLeft: THREE.Mesh[] = [];
+  const sideDoorsRight: THREE.Mesh[] = [];
+  const ceilingTubes: THREE.Mesh[] = [];
+  const lightSegs: THREE.Mesh[] = [];
+  const adMeshes: THREE.Mesh[] = [];
+  const routeMapMeshes: THREE.Mesh[] = [];
 
   const carDefinitions: ReadonlyArray<{
     id: 'A' | 'B' | 'C';
@@ -287,7 +143,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     carGroup.name = `Car_${carDef.id}`;
     carGroup.position.set(carDef.centerX, 0, 0);
 
-    // 1. Floor & Ceiling
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.position.set(0, -0.04, 0);
     carGroup.add(floor);
@@ -296,11 +151,9 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     ceiling.position.set(0, CAR_HEIGHT + 0.04, 0);
     carGroup.add(ceiling);
 
-    // 2. Side Walls, Windows, and Side Doors (+Z and -Z)
     for (const sideSign of [-1, 1] as const) {
       const wallZ = sideSign * (halfW - 0.03);
 
-      // Lower wall split into 3 segments so doorways at x = ±5.0 are completely open to floor level
       const lowerLeft = new THREE.Mesh(lowerWallEndGeo, lowerWallTrimMat);
       lowerLeft.position.set(-7.24, 0.45, wallZ);
       carGroup.add(lowerLeft);
@@ -317,7 +170,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       upperWall.position.set(0, CAR_HEIGHT - 0.25, wallZ);
       carGroup.add(upperWall);
 
-      // Pillars & window panes (strictly spanning y = 0.90 to y = 1.92 without overlapping upperWall)
       const pillarXs = [-8.2, -6.1, -3.9, -1.9, 0, 1.9, 3.9, 6.1, 8.2];
       for (const px of pillarXs) {
         const pillar = new THREE.Mesh(windowPillarGeo, wallMelamineMat);
@@ -334,7 +186,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
         carGroup.add(glass);
       }
 
-      // 2 Side Door pairs per car side (at x = -5.0 and x = +5.0), inset in a clean pocket
       for (const doorCenterX of [-5.0, 5.0]) {
         const leftLeaf = new THREE.Mesh(sideDoorLeafGeo, doorMetalMat);
         leftLeaf.position.set(doorCenterX - 0.34, 0.96, wallZ - sideSign * 0.055);
@@ -360,7 +211,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       }
     }
 
-    // 3. End Bulkheads framing the Gangway Doorway (at x = -halfL and x = +halfL)
     const bulkheadSideOffsetZ = (GANGWAY_WIDTH + (CAR_WIDTH - GANGWAY_WIDTH) / 2) / 2;
     const plateTex = createCarNumberPlateTexture(carDef.plateLabel, maxAnisotropy);
     textures.push(plateTex);
@@ -391,14 +241,12 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       );
       carGroup.add(headerBulkhead);
 
-      // Car number plate above the gangway doorway
       const plate = new THREE.Mesh(numberPlateGeo, plateMat);
       plate.position.set(endX - endSign * 0.055, GANGWAY_HEIGHT + 0.16, 0);
       plate.rotation.y = endSign > 0 ? -Math.PI / 2 : Math.PI / 2;
       carGroup.add(plate);
     }
 
-    // 4. Molded Fiberglass Benches along both sides (between doors)
     const benchXs = [-7.0, 0, 7.0];
     for (const sideSign of [-1, 1] as const) {
       const seatZ = sideSign * (halfW - 0.32);
@@ -414,7 +262,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       }
     }
 
-    // 5. Stainless Steel Vertical Grab Poles & Overhead Horizontal Bars
     const poleXs = [-6.4, -3.4, -1.6, 1.6, 3.4, 6.4];
     for (const px of poleXs) {
       for (const pz of [-0.56, 0.56]) {
@@ -430,20 +277,24 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       carGroup.add(horizBar);
     }
 
-    // 6. Ceiling Fluorescent Diffuser Tubes
-    const tubeXs = [-6.2, -2.1, 2.1, 6.2];
-    for (const tx of tubeXs) {
+    // Ceiling Fluorescent Diffuser Tubes
+    // In Car B, `lightSegs` holds the platform-side (-Z) tubes at [-7.2, -4.5, -2.1, 2.1, 6.2]
+    // so `lightSegs[DOOR_TUBE_IDX]` (index 1) is at `x = -4.5` nearest the doors with its own `doorTubeMat`.
+    const tubeXs = [-7.2, -4.5, -2.1, 2.1, 6.2];
+    tubeXs.forEach((tx, tIdx) => {
       for (const tz of [-0.96, 0.96]) {
-        const tube = new THREE.Mesh(tubeDiffuserGeo, tubeWarmMat);
+        const isDoorTube = carDef.id === 'B' && tIdx === DOOR_TUBE_IDX && tz < 0;
+        const tube = new THREE.Mesh(tubeDiffuserGeo, isDoorTube ? doorTubeMat : tubeWarmMat);
         tube.position.set(tx, CAR_HEIGHT - 0.04, tz);
-        tube.userData = { carId: carDef.id, tubeX: tx, tubeZ: tz };
+        tube.userData = { carId: carDef.id, tubeX: tx, tubeZ: tz, isDoorTube };
         carGroup.add(tube);
         ceilingTubes.push(tube);
+        if (carDef.id === 'B' && tz < 0) {
+          lightSegs.push(tube);
+        }
       }
-    }
+    });
 
-    // 7. Overhead Cove Advertisements & Strip Route Maps
-    // Placed cleanly on the upper header panel (y = 2.15, z = ±(halfW - 0.08))
     const adXs = [-6.8, -3.2, 0, 3.2, 6.8];
     adXs.forEach((ax, idx) => {
       const acrossEntry = acrossAdMaterials[idx % acrossAdMaterials.length];
@@ -478,7 +329,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       }
     });
 
-    // Route maps above side doors (plus a central strip map at x = -1.6 across from player seat)
     for (const sideSign of [-1, 1] as const) {
       const mapXs = sideSign === -1 ? [-5.0, -1.6, 5.0] : [-5.0, 5.0];
       for (const mapX of mapXs) {
@@ -494,38 +344,11 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     root.add(carGroup);
   }
 
-  // Cold sterile blue fluorescent material for "The Cold Panel" anomaly
-  const tubeColdBlueMat = new THREE.MeshStandardMaterial({
-    color: 0xd9f2ff,
-    emissive: 0x6ec6ff,
-    emissiveIntensity: 1.9,
-    roughness: 0.2,
-  });
-  materials.push(tubeColdBlueMat);
-
-  // Window residue decal mesh in Car B across from seat (x = -0.95, y = 1.44, z = -(CAR_WIDTH/2 - 0.078))
-  const residueGeo = new THREE.PlaneGeometry(0.42, 0.42);
-  geometries.push(residueGeo);
-  const stickerTex = createWindowResidueTexture('sticker', maxAnisotropy);
-  const stainTex = createWindowResidueTexture('stain', maxAnisotropy);
-  textures.push(stickerTex, stainTex);
-  const residueMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: stickerTex,
-    transparent: true,
-    roughness: 0.35,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-  });
-  materials.push(residueMat);
   const windowResidueMesh = new THREE.Mesh(residueGeo, residueMat);
   windowResidueMesh.position.set(-0.95, 1.44, -(CAR_WIDTH / 2 - 0.078));
   windowResidueMesh.visible = false;
   root.add(windowResidueMesh);
 
-  // 8. Gangway Bellows & Sliding Gangway Doors between Cars A↔B (-9.75) and B↔C (+9.75)
   for (const gangwayX of GANGWAY_CENTERS_X) {
     const gangwayGroup = new THREE.Group();
     gangwayGroup.position.set(gangwayX, 0, 0);
@@ -534,7 +357,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     gFloor.position.set(0, -0.03, 0);
     gangwayGroup.add(gFloor);
 
-    // Ribbed accordion bellows folds
     const ribOffsets = [-0.72, -0.44, -0.15, 0.15, 0.44, 0.72];
     for (const rx of ribOffsets) {
       const rib = new THREE.Mesh(bellowsRibGeo, bellowsRubberMat);
@@ -542,7 +364,6 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
       gangwayGroup.add(rib);
     }
 
-    // Sliding gangway door leaves
     const leftLeaf = new THREE.Mesh(gangwayDoorLeafGeo, doorMetalMat);
     leftLeaf.position.set(0, GANGWAY_HEIGHT / 2, -GANGWAY_WIDTH / 4);
     gangwayGroup.add(leftLeaf);
@@ -619,92 +440,34 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     if (key === lastAppliedAnomalyKey) return;
     lastAppliedAnomalyKey = key;
 
-    // 1. Reset Car B across-the-aisle ad materials, window residue, cold ceiling tube, and route map
-    for (const mesh of adMeshes) {
-      if (mesh.userData.carId === 'B' && mesh.userData.baseMaterial) {
-        mesh.material = mesh.userData.baseMaterial as THREE.Material;
-      }
-    }
-    windowResidueMesh.visible = false;
-    for (const tube of ceilingTubes) {
-      tube.material = tubeWarmMat;
-    }
-    updateRouteMaps(route, false);
-
-    if (!active) return;
-
-    switch (active.id) {
-      case 'misprint':
-      case 'warped_copy':
-      case 'color_drift': {
-        const slotIdx = active.adIndex ?? 2;
-        const adDef =
-          ADS_ACROSS_AISLE[slotIdx % ADS_ACROSS_AISLE.length] ?? ADS_ACROSS_AISLE[0]!;
-        const targetMesh = adMeshes.find(
-          (m) =>
-            m.userData.carId === 'B' &&
-            m.userData.placement === 'across' &&
-            m.userData.slotIndex === slotIdx
-        );
-        if (targetMesh) {
-          const overrideTex = createAdTexture(
-            adDef,
-            maxAnisotropy,
-            active.adSwappedHeadline,
-            active.adShiftedBgColor
-          );
-          textures.push(overrideTex);
-          const overrideMat = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            map: overrideTex,
-            roughness: 0.42,
-            metalness: 0.06,
-            polygonOffset: true,
-            polygonOffsetFactor: -1,
-            polygonOffsetUnits: -1,
-          });
-          materials.push(overrideMat);
-          targetMesh.material = overrideMat;
-        }
-        break;
-      }
-
-      case 'window_residue': {
-        residueMat.map = active.variantKey === 'stain' ? stainTex : stickerTex;
-        residueMat.needsUpdate = true;
-        windowResidueMesh.visible = true;
-        break;
-      }
-
-      case 'cold_panel': {
-        for (const tube of ceilingTubes) {
-          if (
-            tube.userData.carId === 'B' &&
-            Math.abs(Number(tube.userData.tubeX) - -2.1) < 0.2
-          ) {
-            tube.material = tubeColdBlueMat;
-          }
-        }
-        break;
-      }
-
-      case 'route_map_error': {
-        if (active.variantKey === 'wrong_color') {
-          updateRouteMaps(route, false, '#c84b9e');
-        } else {
-          updateRouteMaps(route, true);
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
+    applyCarAnomalyToMeshes(
+      {
+        adMeshes,
+        ceilingTubes,
+        lightSegs,
+        windowResidueMesh,
+        residueMat,
+        stickerTex,
+        stainTex,
+        tubeWarmMat,
+        doorTubeMat,
+        tubeColdBlueMat,
+        maxAnisotropy,
+        textures,
+        materials,
+        updateRouteMaps,
+      },
+      anomaly,
+      route
+    );
   };
 
+  // Single-tube door-tick isolation: ONLY `lightSegs[DOOR_TUBE_IDX]` (`doorTubeMat` at `x = -4.5`) flickers.
+  // Every other ceiling tube in the car (`tubeWarmMat`) remains completely steady at 1.45.
   const setCeilingLightIntensity = (multiplier: number): void => {
     const clamped = Math.max(0.04, Math.min(1.6, multiplier));
-    tubeWarmMat.emissiveIntensity = 1.45 * clamped;
+    tubeWarmMat.emissiveIntensity = 1.45;
+    doorTubeMat.emissiveIntensity = 1.45 * clamped;
   };
 
   const dispose = (): void => {
@@ -720,6 +483,7 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     sideDoorsLeft,
     sideDoorsRight,
     ceilingTubes,
+    lightSegs,
     adMeshes,
     routeMapMeshes,
     updateGangwayDoors,
@@ -730,4 +494,3 @@ export function buildSubwayConsist(maxAnisotropy = 4): SubwayConsistRig {
     dispose,
   };
 }
-

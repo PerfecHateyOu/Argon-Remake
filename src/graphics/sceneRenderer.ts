@@ -14,6 +14,7 @@ import {
   CAMERA_FOV_LANDSCAPE,
   CAMERA_NEAR,
   CAR_CENTERS_X,
+  DOOR_LIGHT_IDX,
   FLUORESCENT_LIGHT_COLOR,
   FLUORESCENT_LIGHT_DECAY,
   FLUORESCENT_LIGHT_DISTANCE,
@@ -115,7 +116,7 @@ export class SceneRenderer {
   private trialRig: TrialRoomRig;
   private passingTrainRig: PassingTrainRig;
   private charactersRig: CarCharactersRig;
-  private pooledFluorescentLights: THREE.PointLight[] = [];
+  private carLights: THREE.PointLight[] = [];
   private gangwayAmberLights: THREE.PointLight[] = [];
 
   private lastSyncedStationKey = '';
@@ -141,7 +142,8 @@ export class SceneRenderer {
       CAMERA_FAR
     );
     this.camera.position.set(PLAYER_SEAT_X, PLAYER_EYE_HEIGHT_SEATED, PLAYER_SEAT_Z);
-    _euler.set(-0.03, 0, 0, 'YXZ');
+    // Eye-Level Rule: Camera starts facing directly across the car at seated eye level (pitch = 0, yaw = 0)
+    _euler.set(0, 0, 0, 'YXZ');
     this.camera.quaternion.setFromEuler(_euler);
 
     this.renderer = new THREE.WebGLRenderer({
@@ -220,6 +222,18 @@ export class SceneRenderer {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    if (typeof window !== 'undefined' && !import.meta.env?.PROD) {
+      (window as unknown as Record<string, unknown>).__R = {
+        renderer: this.renderer,
+        scene: this.scene,
+        camera: this.camera,
+        glitchPass: this.glitchPass,
+        consistRig: this.consistRig,
+        carLights: this.carLights,
+        lightSegs: this.consistRig.lightSegs,
+      };
+    }
+
     window.addEventListener('resize', this.handleResize);
   }
 
@@ -227,7 +241,8 @@ export class SceneRenderer {
     const hemiLight = new THREE.HemisphereLight(FLUORESCENT_LIGHT_COLOR, 0x0c0e12, 0.36);
     this.scene.add(hemiLight);
 
-    const initialXOffsets = [-6.5, -2.2, 2.2, 6.5];
+    // 5 pooled car lights: indices 0..3 are steady car lights; index 4 (`DOOR_LIGHT_IDX = 4`) is at x = -6.0
+    const initialXOffsets = [-6.8, -2.2, 2.2, 6.8, -6.0];
     for (const offset of initialXOffsets) {
       const light = new THREE.PointLight(
         FLUORESCENT_LIGHT_COLOR,
@@ -237,7 +252,7 @@ export class SceneRenderer {
       );
       light.position.set(offset, 2.24, 0);
       this.scene.add(light);
-      this.pooledFluorescentLights.push(light);
+      this.carLights.push(light);
     }
 
     for (const gx of [-9.75, 9.75]) {
@@ -248,6 +263,11 @@ export class SceneRenderer {
     }
   }
 
+  /**
+   * Single-Tube Door-Tick Isolation:
+   * Only `carLights[DOOR_LIGHT_IDX]` (`DOOR_LIGHT_IDX = 4` at `x = -6.0`) flickers with `flickerMult`.
+   * Every other ambient/car light in `carLights[0..3]` remains completely steady at 1.15.
+   */
   private updateLightPoolPositions(
     playerX: number,
     flickerMult: number,
@@ -260,14 +280,13 @@ export class SceneRenderer {
       centerAnchorX = CAR_CENTERS_X.C;
     }
 
-    const offsets = [-6.2, -2.0, 2.0, 6.2];
-    const targetIntensity = 1.15 * flickerMult;
-    for (let i = 0; i < this.pooledFluorescentLights.length; i++) {
-      const light = this.pooledFluorescentLights[i];
+    const offsets = [-6.8, -2.2, 2.2, 6.8, -6.0];
+    for (let i = 0; i < this.carLights.length; i++) {
+      const light = this.carLights[i];
       const offset = offsets[i] ?? 0;
       if (light) {
         light.position.x = centerAnchorX + offset;
-        light.intensity = targetIntensity;
+        light.intensity = i === DOOR_LIGHT_IDX ? 1.15 * flickerMult : 1.15;
         if (coldPanelActive && centerAnchorX === CAR_CENTERS_X.B && i === 1) {
           light.color.setHex(0x6ec6ff);
         } else {
@@ -397,7 +416,7 @@ export class SceneRenderer {
       if (snap.phase === 'menu') {
         const swayY = reducedEffects ? 0 : Math.sin(this.elapsedSec * 1.8) * 0.004;
         this.camera.position.set(PLAYER_SEAT_X, PLAYER_EYE_HEIGHT_SEATED + swayY, PLAYER_SEAT_Z);
-        _euler.set(-0.03, 0, 0, 'YXZ');
+        _euler.set(0, 0, 0, 'YXZ');
         this.camera.quaternion.setFromEuler(_euler);
         this.tunnelRig.step(clampedDtSec, 8.0, 200, false);
         this.trestleRig.update(clampedDtSec, this.elapsedSec, 0, false);
@@ -533,4 +552,3 @@ export class SceneRenderer {
     this.renderer.dispose();
   }
 }
-

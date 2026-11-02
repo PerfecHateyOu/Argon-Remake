@@ -7,6 +7,7 @@ interface MoveStickProps {
 /**
  * Touch / pointer WALK joystick ("Walk: drag the stick", "WALK stick, bottom left").
  * Emits normalized (x, y) in [-1, 1] where y > 0 is forward and x > 0 is right.
+ * Stops touch/pointer propagation so walking never interferes with canvas touch-look drag.
  */
 export const MoveStick: React.FC<MoveStickProps> = ({ onMove }) => {
   const baseRef = useRef<HTMLDivElement | null>(null);
@@ -34,14 +35,20 @@ export const MoveStick: React.FC<MoveStickProps> = ({ onMove }) => {
     onMove(dx / maxRadius, -dy / maxRadius);
   };
 
-  const resetStick = () => {
+  const resetStick = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation();
     setActive(false);
     setKnobOffset({ x: 0, y: 0 });
     onMove(0, 0);
   };
 
   return (
-    <div className="flex flex-col items-center gap-1.5 pointer-events-auto select-none">
+    <div
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
+      className="flex flex-col items-center gap-1.5 pointer-events-auto select-none touch-none"
+    >
       <div
         ref={baseRef}
         role="slider"
@@ -51,20 +58,22 @@ export const MoveStick: React.FC<MoveStickProps> = ({ onMove }) => {
         aria-valuenow={Number((knobOffset.y / maxRadius).toFixed(1))}
         tabIndex={-1}
         onPointerDown={(e) => {
+          e.stopPropagation();
           e.currentTarget.setPointerCapture(e.pointerId);
           setActive(true);
           updateFromClientPos(e.clientX, e.clientY);
         }}
         onPointerMove={(e) => {
+          e.stopPropagation();
           if (!active) return;
           updateFromClientPos(e.clientX, e.clientY);
         }}
         onPointerUp={resetStick}
         onPointerCancel={resetStick}
-        className="relative w-20 h-20 rounded-full border border-[#e6e2d8]/30 bg-[#080a08]/90 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
+        className="relative w-20 h-20 min-w-[44px] min-h-[44px] rounded-full border border-[#ece7db]/30 bg-[#070907]/90 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing"
       >
         <div
-          className="w-8 h-8 rounded-full bg-[#fff0d4] border border-[#040504] transition-transform duration-75"
+          className="w-8 h-8 rounded-full bg-[#fff0d4] border border-[#070907] transition-transform duration-75"
           style={{
             transform: `translate3d(${knobOffset.x}px, ${knobOffset.y}px, 0)`,
           }}

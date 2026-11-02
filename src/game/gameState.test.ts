@@ -356,7 +356,41 @@ test('gameEngine handles Polaroid 600 anomaly capture, watched flash suspicion, 
   gameEngine.returnToMenu();
 });
 
+test('Argon Hardening: Eye-Level camera start/exitTrial (pitch === 0, yaw === 0) and Restraint screen-space G.dim without car light dimming', () => {
+  // Tilt player head away from eye level, then call newGame -> must reset to seated eye level (0, 0)
+  gameEngine.syncPlayerPose(2.0, 0.4, 0.75, -0.35);
+  gameEngine.newGame({ chapter: 1 });
+  assert.equal(gameEngine.playerPitch, 0.0);
+  assert.equal(gameEngine.playerYaw, 0.0);
 
+  // Tilt head again and startIntro -> must reset to seated eye level (0, 0)
+  gameEngine.syncPlayerPose(1.5, 0.3, -0.5, 0.25);
+  gameEngine.startIntro();
+  assert.equal(gameEngine.playerPitch, 0.0);
+  assert.equal(gameEngine.playerYaw, 0.0);
 
+  // Tilt head inside a trial and exitTrial -> must reset to seated eye level (0, 0)
+  gameEngine.startRide({ chapter: 2 });
+  gameEngine.enterTrialRoom(6);
+  gameEngine.syncPlayerPose(1.0, 0.2, 0.6, -0.4);
+  gameEngine.exitTrial();
+  assert.equal(gameEngine.playerPitch, 0.0);
+  assert.equal(gameEngine.playerYaw, 0.0);
+
+  // Restraint moment must NEVER dim interior car lights (lightFlickerIntensity === 1.0) and must drive G.dim screen-space
+  gameEngine.enterSegment(10);
+  gameEngine.triggerRestraintMoment();
+  assert.equal(gameEngine.getSnapshot().lightFlickerIntensity, 1.0);
+  assert.equal(gameEngine.dim, 0);
+  gameEngine.setRestraintHolding(true);
+  gameEngine.stepRide(7.5);
+  assert.equal(gameEngine.getSnapshot().lightFlickerIntensity, 1.0);
+  assert.ok(gameEngine.dim > 0.15 && gameEngine.dim <= 0.4);
+  gameEngine.stepRide(8.0);
+  assert.equal(gameEngine.getSnapshot().lightFlickerIntensity, 1.0);
+  assert.equal(gameEngine.dim, 0);
+
+  gameEngine.returnToMenu();
+});
 
 

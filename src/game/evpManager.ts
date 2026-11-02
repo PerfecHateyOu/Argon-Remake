@@ -476,3 +476,19 @@ export function buildEvpTapeRecord(params: {
     stopNumber,
   };
 }
+
+export const evpManager = {
+  EVP_STATION_SPECS,
+  reshuffleEvpFrequencies,
+  getStationFrequencyKhz,
+  getActiveEvpSignalsForStretch,
+  clampEvpFrequency,
+  resolveEvpStationText,
+  evaluateEvpTuning,
+  buildEvpTapeRecord,
+};
+
+if (typeof window !== 'undefined' && !import.meta.env?.PROD) {
+  (window as unknown as Record<string, unknown>).__EVP = evpManager;
+}
+

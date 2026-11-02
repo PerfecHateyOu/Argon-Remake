@@ -28,7 +28,7 @@ export const TutorialCoach: React.FC<TutorialCoachProps> = ({
           type="button"
           data-testid="tutorial-skip-button"
           onClick={onFinishTutorial}
-          className="text-[11px] font-mono text-[#c8c3b8] hover:text-[#fff0d4] underline cursor-pointer"
+          className="min-h-[44px] min-w-[44px] px-2 text-[11px] font-mono text-[#c8c3b8] hover:text-[#fff0d4] underline cursor-pointer"
         >
           Start the ride
         </button>
@@ -72,7 +72,7 @@ export const TutorialCoach: React.FC<TutorialCoachProps> = ({
             type="button"
             data-testid="tutorial-start-ride-button"
             onClick={onFinishTutorial}
-            className="px-4 py-2 bg-[#fff0d4] text-[#040504] text-xs font-semibold hover:bg-[#ffcf8a] cursor-pointer whitespace-nowrap"
+            className="min-h-[44px] min-w-[44px] px-4 py-2 bg-[#fff0d4] text-[#040504] text-xs font-semibold hover:bg-[#ffcf8a] cursor-pointer whitespace-nowrap"
           >
             Start the ride (or press Enter)
           </button>
@@ -81,7 +81,7 @@ export const TutorialCoach: React.FC<TutorialCoachProps> = ({
             type="button"
             data-testid="tutorial-next-step-button"
             onClick={onAdvanceStep}
-            className="px-3.5 py-1.5 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#fff0d4] hover:border-[#ffcf8a] cursor-pointer whitespace-nowrap"
+            className="min-h-[44px] min-w-[44px] px-3.5 py-2 border border-[#e6e2d8]/30 bg-[#0e110e] text-xs text-[#fff0d4] hover:border-[#ffcf8a] cursor-pointer whitespace-nowrap"
           >
             Next step →
           </button>

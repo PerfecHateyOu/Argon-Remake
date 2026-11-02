@@ -70,7 +70,7 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
           data-testid="evp-lower-button"
           onClick={onLower}
           aria-label="Lower recorder"
-          className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.12em] bg-[#141815] hover:bg-[#1f2621] text-[#f2efe9]/80 border border-[#f2efe9]/20 cursor-pointer"
+          className="min-h-[44px] min-w-[44px] flex items-center gap-1 px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-[0.12em] bg-[#141815] hover:bg-[#1f2621] text-[#f2efe9]/80 border border-[#f2efe9]/20 cursor-pointer"
         >
           <X className="w-3 h-3" />
           <span>Lower recorder</span>
@@ -85,7 +85,7 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
           aria-label="Tune down 1 kHz"
           title="Tune down 1 kHz"
           onClick={() => onStepFrequency(-1)}
-          className="flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
+          className="min-h-[44px] min-w-[44px] flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
           <span>Tune down</span>
@@ -116,7 +116,7 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
           aria-label="Tune up 1 kHz"
           title="Tune up 1 kHz"
           onClick={() => onStepFrequency(1)}
-          className="flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
+          className="min-h-[44px] min-w-[44px] flex items-center gap-1 px-2.5 py-1.5 bg-[#141815] hover:bg-[#202622] border border-[#f2efe9]/20 text-xs font-mono text-[#f2efe9] cursor-pointer"
         >
           <span>Tune up</span>
           <ChevronRight className="w-3.5 h-3.5" />
@@ -173,7 +173,7 @@ export const EvpRecorder: React.FC<EvpRecorderProps> = ({
           e.preventDefault();
           onSetRecording(false);
         }}
-        className={`relative w-full py-2.5 px-3 border text-xs font-mono uppercase tracking-[0.14em] font-semibold overflow-hidden transition-colors cursor-pointer ${
+        className={`min-h-[44px] min-w-[44px] relative w-full py-2.5 px-3 border text-xs font-mono uppercase tracking-[0.14em] font-semibold overflow-hidden transition-colors cursor-pointer ${
           isRecording
             ? 'bg-[#3a1818] border-[#ff8a7a] text-[#ffcf8a]'
             : 'bg-[#141815] hover:bg-[#1d241f] border-[#ffcf8a]/40 text-[#ffcf8a]'

@@ -1,4 +1,43 @@
-import type { ActiveMaskCheckState, TutorialState, TutorialStepId } from '../types';
+import { SANITY_DELTAS, SEGMENT_TABLE } from '../constants';
+import { playerController } from '../input/keyLook';
+import { pointerLock } from '../input/pointerLock';
+import type {
+  ActiveMaskCheckState,
+  EngineSnapshot,
+  FalseStopTrialRecord,
+  SegmentRule,
+  SubtitleItem,
+  TrialState,
+  TutorialState,
+  TutorialStepId,
+} from '../types';
+import {
+  buildActiveAnomalyInstance,
+  isLookingAtAnomaly,
+  stepFlagHoldProgress,
+} from './anomalyManager';
+import { resetPlayerCameraToSeatedEyeLevel } from './engineMovement';
+
+export type TrialChoiceId =
+  | 'terminus_sign'
+  | 'opposite_sign'
+  | 'left_stairs'
+  | 'middle_stairs'
+  | 'right_stairs'
+  | 'left_train'
+  | 'right_train';
+
+export interface TutorialAndTrialAdapter {
+  getSnapshot(): EngineSnapshot;
+  getCurrentSegmentRule(): SegmentRule;
+  update(patch: Partial<EngineSnapshot>): EngineSnapshot;
+  showSubtitle(item: Omit<SubtitleItem, 'id'>, durationSec?: number): void;
+  setSubtitleRemainingSec(sec: number): void;
+  enterSegment(tableIndex: number): void;
+  exitTrial(): void;
+  finishPracticeStretch(): void;
+  catchActiveAnomaly(caughtByPhoto?: boolean): boolean;
+}
 
 export const TUTORIAL_STRINGS = {
   STEP_1_TITLE: 'Look around',
@@ -105,3 +144,292 @@ export function buildTutorialMaskCheck(): ActiveMaskCheckState {
   };
 }
 
+export function startPracticeStretchHelper(adapter: TutorialAndTrialAdapter): void {
+  const isTouch =
+    typeof window !== 'undefined' &&
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  const stickerAnomaly = buildActiveAnomalyInstance('window_residue', () => 0.1);
+  const eyeLevelPatch = resetPlayerCameraToSeatedEyeLevel(adapter.getSnapshot());
+  pointerLock.clearErrorHint();
+
+  adapter.update({
+    ...eyeLevelPatch,
+    phase: 'intro',
+    rideSubPhase: 'cruising',
+    paused: false,
+    trainSpeedMps: 12.0,
+    tutorialState: buildTutorialStepState('look_around', isTouch),
+    activeAnomaly: { ...stickerAnomaly, manifested: true },
+    activeMaskCheck: null,
+    watchingParentLabel: null,
+    isPracticeRun: true,
+    subtitle: { id: 'tutorial-step-1', text: TUTORIAL_STRINGS.STEP_1_BODY },
+  });
+  adapter.setSubtitleRemainingSec(6.0);
+}
+
+export function advanceTutorialStepHelper(adapter: TutorialAndTrialAdapter): void {
+  const snapshot = adapter.getSnapshot();
+  if (snapshot.phase !== 'intro' || !snapshot.tutorialState) return;
+  const isTouch =
+    typeof window !== 'undefined' &&
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  const cur = snapshot.tutorialState.stepId;
+
+  if (cur === 'look_around') {
+    const maskCheck = buildTutorialMaskCheck();
+    adapter.update({
+      tutorialState: buildTutorialStepState('dont_show_it', isTouch),
+      activeAnomaly: null,
+      activeMaskCheck: maskCheck,
+      watchingParentLabel: 'Mom',
+      subtitle: { id: 'tutorial-mom-question', speaker: 'Mom', text: maskCheck.question },
+    });
+    adapter.setSubtitleRemainingSec(10.0);
+  } else if (cur === 'dont_show_it') {
+    adapter.update({
+      tutorialState: buildTutorialStepState('read_the_doors', isTouch),
+      activeMaskCheck: null,
+      watchingParentLabel: null,
+      subtitle: { id: 'tutorial-doors', text: TUTORIAL_STRINGS.STEP_3_SUMMARY_BODY },
+    });
+    adapter.setSubtitleRemainingSec(8.0);
+  } else if (cur === 'read_the_doors') {
+    adapter.update({
+      tutorialState: buildTutorialStepState('ready', isTouch),
+      subtitle: { id: 'tutorial-ready', text: TUTORIAL_STRINGS.STEP_4_BODY },
+    });
+    adapter.setSubtitleRemainingSec(8.0);
+  } else {
+    adapter.finishPracticeStretch();
+  }
+}
+
+export function stepIntroTutorialFlagHelper(
+  adapter: TutorialAndTrialAdapter,
+  dtSec: number
+): boolean {
+  const snapshot = adapter.getSnapshot();
+  if (!snapshot.isFlagHolding && snapshot.flagHoldProgress <= 0) {
+    return false;
+  }
+  const camY = playerController.getState().y || 1.24;
+  const lookingAtActive = isLookingAtAnomaly(
+    snapshot.activeAnomaly,
+    snapshot.playerX,
+    camY,
+    snapshot.playerZ,
+    snapshot.playerYaw,
+    snapshot.playerPitch
+  );
+  const flagStep = stepFlagHoldProgress({
+    isHolding: snapshot.isFlagHolding,
+    currentProgress: snapshot.flagHoldProgress,
+    dtSec,
+    lookingAtActiveAnomaly: lookingAtActive,
+  });
+  snapshot.flagHoldProgress = Number(flagStep.nextProgress.toFixed(2));
+  if (flagStep.completedCatch) {
+    adapter.catchActiveAnomaly(false);
+    const curTutorial = adapter.getSnapshot().tutorialState;
+    if (curTutorial) {
+      adapter.update({
+        tutorialState: {
+          ...curTutorial,
+          feedbackText: TUTORIAL_STRINGS.STEP_1_CAUGHT_FEEDBACK,
+        },
+      });
+    }
+  } else if (flagStep.completedFalseFlag && snapshot.tutorialState) {
+    adapter.update({
+      isFlagHolding: false,
+      flagHoldProgress: 0,
+      tutorialState: {
+        ...snapshot.tutorialState,
+        feedbackText: TUTORIAL_STRINGS.STEP_1_MISS_FEEDBACK,
+      },
+    });
+  }
+  return true;
+}
+
+export function enterTrialRoomHelper(
+  adapter: TutorialAndTrialAdapter,
+  stopNumber?: number
+): void {
+  const seg = adapter.getCurrentSegmentRule();
+  const trial: TrialState = {
+    stage: 1,
+    stopNumber: stopNumber ?? seg.stopNumber,
+    depth: 1,
+    steadyStairIndex: 1,
+    steadyTrainSide: 'right',
+    feedbackText:
+      'Find the way back. The signs lie. Watch the lights when the chime plays.',
+  };
+  pointerLock.unlock({ quiet: true });
+  const eyeLevelPatch = resetPlayerCameraToSeatedEyeLevel(adapter.getSnapshot());
+  adapter.update({
+    ...eyeLevelPatch,
+    phase: 'trial',
+    trialState: trial,
+    trainSpeedMps: 0,
+    activeMaskCheck: null,
+    watchingParentLabel: null,
+    subtitle: { id: `trial-start-${Date.now()}`, text: trial.feedbackText ?? '' },
+  });
+  adapter.setSubtitleRemainingSec(6.0);
+}
+
+export function chooseTrialOptionHelper(
+  adapter: TutorialAndTrialAdapter,
+  choice: TrialChoiceId
+): void {
+  const snapshot = adapter.getSnapshot();
+  const trial = snapshot.trialState;
+  if (snapshot.phase !== 'trial' || !trial) return;
+
+  if (trial.stage === 1) {
+    if (choice === 'opposite_sign') {
+      const nextTrial: TrialState = {
+        ...trial,
+        stage: 2,
+        feedbackText: 'The stairs go down to another platform.',
+      };
+      adapter.update({ trialState: nextTrial });
+      adapter.showSubtitle(
+        { stageDirection: 'The stairs go down to another platform.', text: '' },
+        3.8
+      );
+    } else {
+      const nextTrial: TrialState = {
+        ...trial,
+        stage: 1,
+        depth: trial.depth + 1,
+        feedbackText:
+          'The stairs bring you back up onto the same platform. It’s quieter now.',
+      };
+      adapter.update({ trialState: nextTrial });
+      adapter.showSubtitle(
+        {
+          stageDirection:
+            'The stairs bring you back up onto the same platform. It’s quieter now.',
+          text: '',
+        },
+        3.8
+      );
+    }
+    return;
+  }
+
+  if (trial.stage === 2) {
+    const stairIdx =
+      choice === 'left_stairs' ? 0 : choice === 'middle_stairs' ? 1 : 2;
+    if (stairIdx === trial.steadyStairIndex) {
+      const nextTrial: TrialState = {
+        ...trial,
+        stage: 3,
+        feedbackText: 'You come out at the platform edge. Two trains are coming.',
+      };
+      adapter.update({ trialState: nextTrial });
+      adapter.showSubtitle(
+        {
+          stageDirection:
+            'You come out at the platform edge. Two trains are coming.',
+          text: '',
+        },
+        4.0
+      );
+    } else {
+      const nextTrial: TrialState = {
+        ...trial,
+        stage: 1,
+        depth: trial.depth + 1,
+        feedbackText:
+          'The stairs bring you back up onto the same platform. It’s quieter now.',
+      };
+      adapter.update({ trialState: nextTrial });
+      adapter.showSubtitle(
+        {
+          stageDirection:
+            'The stairs bring you back up onto the same platform. It’s quieter now.',
+          text: '',
+        },
+        3.8
+      );
+    }
+    return;
+  }
+
+  if (trial.stage === 3) {
+    const chosenSide = choice === 'left_train' ? 'left' : 'right';
+    if (chosenSide === trial.steadyTrainSide) {
+      adapter.exitTrial();
+    } else {
+      const nextTrial: TrialState = {
+        ...trial,
+        stage: 2,
+        depth: trial.depth + 1,
+        feedbackText: 'The doors close on nothing. You’re back on the stairs.',
+      };
+      adapter.update({ trialState: nextTrial });
+      adapter.showSubtitle(
+        {
+          stageDirection:
+            'The doors close on nothing. You’re back on the stairs.',
+          text: '',
+        },
+        3.8
+      );
+    }
+  }
+}
+
+export function exitTrialHelper(adapter: TutorialAndTrialAdapter): void {
+  const snapshot = adapter.getSnapshot();
+  const trial = snapshot.trialState;
+  const depth = trial?.depth ?? 1;
+  const stopNumber = trial?.stopNumber ?? adapter.getCurrentSegmentRule().stopNumber;
+
+  const record: FalseStopTrialRecord = {
+    stop: stopNumber,
+    depth,
+  };
+  const nextTrials = [...snapshot.falseStopTrials, record];
+  const nextIdx = Math.min(
+    SEGMENT_TABLE.length - 1,
+    snapshot.segmentTableIndex + 1
+  );
+
+  // Eye-Level Rule: upon exiting any trial, camera faces directly across the car at seated eye level (0.0, 0.0)
+  const eyeLevelPatch = resetPlayerCameraToSeatedEyeLevel(snapshot);
+
+  adapter.update({
+    ...eyeLevelPatch,
+    trialState: null,
+    falseStopTrials: nextTrials,
+    sanity: snapshot.sanity + SANITY_DELTAS.TRIAL,
+    lastReactionReason: 'Returned from a False Stop Trial',
+  });
+
+  adapter.enterSegment(nextIdx);
+
+  if (depth > 1) {
+    adapter.showSubtitle(
+      {
+        stageDirection: 'You don’t remember getting back on.',
+        speaker: 'Mom',
+        text: 'Oh my god. Where were you? Sit. Stay where we can see you.',
+      },
+      4.6
+    );
+  } else {
+    adapter.showSubtitle(
+      {
+        speaker: 'Mom',
+        text: 'Where did you go?! You can’t just walk off like that!',
+      },
+      4.4
+    );
+  }
+}

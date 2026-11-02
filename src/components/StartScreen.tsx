@@ -41,58 +41,26 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-20 flex flex-col justify-between p-6 md:p-12 pointer-events-none select-none"
+      className="fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-5 md:p-10 pointer-events-none select-none overflow-hidden"
       style={{
         background:
-          'linear-gradient(90deg, rgba(4,5,4,0.92) 0%, rgba(4,5,4,0.74) 48%, rgba(4,5,4,0.28) 100%)',
+          'linear-gradient(90deg, rgba(7,9,7,0.92) 0%, rgba(7,9,7,0.74) 50%, rgba(7,9,7,0.28) 100%)',
       }}
     >
-      {/* Top Rollsign & Title Lockup */}
-      <div className="max-w-xl pointer-events-auto">
-        <div className="inline-flex items-center gap-3 border border-[#e6e2d8]/20 bg-[#0b0d0b] px-3.5 py-2 mb-5">
-          <svg
-            width="28"
-            height="28"
-            viewBox="0 0 28 28"
-            aria-hidden="true"
-            className="shrink-0"
-          >
-            <circle cx="14" cy="14" r="13" fill="#6cbe45" />
-            <text
-              x="14"
-              y="19"
-              textAnchor="middle"
-              fill="#040504"
-              fontFamily="sans-serif"
-              fontWeight="800"
-              fontSize="16"
-            >
-              G
-            </text>
-          </svg>
-          <div className="flex flex-col">
-            <span className="text-[11px] tracking-[0.18em] text-[#ffcf8a] font-mono">
-              {UI_STRINGS.SUBTITLE_GENRE}
-            </span>
-            <span className="text-sm font-semibold tracking-wider text-[#f5f2eb]">
-              {UI_STRINGS.SUBTITLE_DEST}
-            </span>
+      {/* Responsive Two-Column Start Card (.start-card, .start-actions, .start-brief) */}
+      <div className="start-card max-w-6xl w-full mx-auto my-auto pointer-events-auto">
+        {/* Left column on ≥640px: Title & Action Buttons (.start-actions) */}
+        <div className="start-actions">
+          <div>
+            <h1 className="text-2xl sm:text-4xl md:text-5xl font-bold tracking-tight text-[#fff0d4] mb-1">
+              {UI_STRINGS.TITLE}
+            </h1>
+            <p className="text-xs sm:text-sm text-[#c8c3b8] leading-snug max-w-md">
+              {UI_STRINGS.DESCRIPTION}
+            </p>
           </div>
-        </div>
 
-        <h1 className="text-4xl md:text-6xl font-bold tracking-tight text-[#fff0d4] mb-3">
-          {UI_STRINGS.TITLE}
-        </h1>
-        <p className="text-sm md:text-base text-[#c8c3b8] leading-relaxed max-w-lg">
-          {UI_STRINGS.DESCRIPTION}
-        </p>
-      </div>
-
-      {/* Middle Action & How-To-Play Split */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-end my-auto py-6">
-        {/* Left column: Boarding & Ride Options */}
-        <div className="lg:col-span-6 max-w-md space-y-5 pointer-events-auto">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
             <button
               type="button"
               data-start="true"
@@ -100,7 +68,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 e.currentTarget.blur();
                 onBoard();
               }}
-              className="px-7 py-3.5 bg-[#fff0d4] text-[#040504] font-semibold text-base tracking-wide hover:bg-[#ffcf8a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] min-w-[44px] px-4 sm:px-6 py-2.5 bg-[#fff0d4] text-[#070907] font-semibold text-sm sm:text-base tracking-wide hover:bg-[#ffcf8a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap"
             >
               Board train
             </button>
@@ -112,7 +80,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 e.currentTarget.blur();
                 onPracticeStretch();
               }}
-              className="px-5 py-3.5 border border-[#ffcf8a]/40 bg-[#0d100d] text-[#ffcf8a] text-sm font-medium hover:border-[#ffcf8a] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] min-w-[44px] px-3.5 sm:px-4 py-2.5 border border-[#ffcf8a]/40 bg-[#0a0d0b] text-[#ffcf8a] text-xs sm:text-sm font-medium hover:border-[#ffcf8a] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap"
             >
               Practice stretch
             </button>
@@ -121,7 +89,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               type="button"
               data-testid="settings-button"
               onClick={onOpenSettings}
-              className="px-5 py-3.5 border border-[#e6e2d8]/30 bg-[#0d100d] text-[#e6e2d8] text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] min-w-[44px] px-3.5 sm:px-4 py-2.5 border border-[#ece7db]/30 bg-[#0a0d0b] text-[#ece7db] text-xs sm:text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap"
             >
               Settings
             </button>
@@ -130,27 +98,31 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               type="button"
               data-testid="case-files-button"
               onClick={onOpenCaseFiles}
-              className="px-5 py-3.5 border border-[#e6e2d8]/30 bg-[#0d100d] text-[#e6e2d8] text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] min-w-[44px] px-3.5 sm:px-4 py-2.5 border border-[#ece7db]/30 bg-[#0a0d0b] text-[#ece7db] text-xs sm:text-sm font-medium hover:border-[#fff0d4] hover:text-[#fff0d4] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffcf8a] transition-colors cursor-pointer whitespace-nowrap"
             >
               Case Files
             </button>
           </div>
 
           {/* Nightmare Mode & Chapter Select */}
-          <div className="border border-[#e6e2d8]/15 bg-[#090b09] p-4 space-y-3">
+          <div className="border border-[#ece7db]/15 bg-[#070907]/90 p-2.5 sm:p-3.5 space-y-2">
             {!unlockedExtras && (
-              <p className="text-xs text-[#9e9a90]">{UI_STRINGS.UNLOCK_HINT}</p>
+              <p className="text-[11px] text-[#9e9a90] leading-tight">
+                {UI_STRINGS.UNLOCK_HINT}
+              </p>
             )}
 
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center justify-between gap-3">
               <div>
                 <label
                   htmlFor="nightmare-toggle"
-                  className="text-sm font-medium text-[#e6e2d8] block"
+                  className="text-xs sm:text-sm font-medium text-[#ece7db] block leading-tight"
                 >
                   {UI_STRINGS.NIGHTMARE_LABEL}
                 </label>
-                <p className="text-xs text-[#9e9a90] mt-0.5">{UI_STRINGS.NIGHTMARE_DESC}</p>
+                <p className="text-[11px] text-[#9e9a90] leading-tight">
+                  {UI_STRINGS.NIGHTMARE_DESC}
+                </p>
               </div>
               <input
                 id="nightmare-toggle"
@@ -158,14 +130,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 disabled={!unlockedExtras}
                 checked={snapshot.nightmareMode}
                 onChange={(e) => onToggleNightmare(e.target.checked)}
-                className="mt-1 h-4 w-4 accent-[#ffcf8a] disabled:opacity-40 cursor-pointer"
+                className="h-5 w-5 accent-[#ffcf8a] disabled:opacity-40 cursor-pointer shrink-0"
               />
             </div>
 
-            <div className="pt-2 border-t border-[#e6e2d8]/10 flex items-center justify-between gap-4">
+            <div className="pt-1.5 border-t border-[#ece7db]/10 flex items-center justify-between gap-2">
               <label
                 htmlFor="start-chapter-select"
-                className="text-sm font-medium text-[#e6e2d8] whitespace-nowrap"
+                className="text-xs sm:text-sm font-medium text-[#ece7db] whitespace-nowrap"
               >
                 {UI_STRINGS.START_FROM_LABEL}
               </label>
@@ -176,7 +148,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 onChange={(e) =>
                   onSelectChapter(Number(e.target.value) as ChapterStartOption)
                 }
-                className="bg-[#121512] border border-[#e6e2d8]/25 text-xs text-[#e6e2d8] px-2.5 py-1.5 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-[#ffcf8a]"
+                className="min-h-[36px] bg-[#121512] border border-[#ece7db]/25 text-xs text-[#ece7db] px-2 py-1 disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-[#ffcf8a]"
               >
                 <option value={1}>Chapter I — Hoyt–Schermerhorn</option>
                 <option value={2}>Chapter II — Bedford–Nostrand (Practice)</option>
@@ -186,32 +158,63 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </div>
 
-        {/* Right column: Canonical How to Play Rules */}
-        <div className="lg:col-span-6 max-w-lg border border-[#e6e2d8]/15 bg-[#090b09] p-5 space-y-3 pointer-events-auto">
-          <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-[#fff0d4]">
+        {/* Right column on ≥640px: Station Plaque & Briefing Text (.start-brief) */}
+        <div className="start-brief border border-[#ece7db]/15 bg-[#070907]/90 p-3 sm:p-4">
+          <div className="inline-flex items-center gap-2.5 border border-[#ece7db]/20 bg-[#0a0d0b] px-3 py-1.5 self-start">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 28 28"
+              aria-hidden="true"
+              className="shrink-0"
+            >
+              <circle cx="14" cy="14" r="13" fill="#6cbe45" />
+              <text
+                x="14"
+                y="19"
+                textAnchor="middle"
+                fill="#070907"
+                fontFamily="sans-serif"
+                fontWeight="800"
+                fontSize="16"
+              >
+                G
+              </text>
+            </svg>
+            <div className="flex flex-col">
+              <span className="text-[10px] tracking-[0.16em] text-[#ffcf8a] font-mono leading-tight">
+                {UI_STRINGS.SUBTITLE_GENRE}
+              </span>
+              <span className="text-xs font-semibold tracking-wider text-[#ece7db] leading-tight">
+                {UI_STRINGS.SUBTITLE_DEST}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-0.5 pt-1 border-t border-[#ece7db]/10">
+            <h2 className="text-xs sm:text-sm font-semibold text-[#fff0d4]">
               {UI_STRINGS.HOW_TO_PLAY_1_TITLE}
             </h2>
-            <p className="text-xs text-[#c8c3b8] leading-relaxed">
+            <p className="text-[11px] sm:text-xs text-[#c8c3b8] leading-snug">
               {UI_STRINGS.HOW_TO_PLAY_1_BODY}{' '}
               <span className="text-[#ffcf8a] font-mono">F</span>. Flags are private.
             </p>
           </div>
 
-          <div className="space-y-1 pt-2 border-t border-[#e6e2d8]/10">
-            <h2 className="text-sm font-semibold text-[#fff0d4]">
+          <div className="space-y-0.5 pt-1.5 border-t border-[#ece7db]/10">
+            <h2 className="text-xs sm:text-sm font-semibold text-[#fff0d4]">
               {UI_STRINGS.HOW_TO_PLAY_2_TITLE}
             </h2>
-            <p className="text-xs text-[#c8c3b8] leading-relaxed">
+            <p className="text-[11px] sm:text-xs text-[#c8c3b8] leading-snug">
               {UI_STRINGS.HOW_TO_PLAY_2_BODY}
             </p>
           </div>
 
-          <div className="space-y-1 pt-2 border-t border-[#e6e2d8]/10">
-            <h2 className="text-sm font-semibold text-[#fff0d4]">
+          <div className="space-y-0.5 pt-1.5 border-t border-[#ece7db]/10">
+            <h2 className="text-xs sm:text-sm font-semibold text-[#fff0d4]">
               {UI_STRINGS.HOW_TO_PLAY_3_TITLE}
             </h2>
-            <p className="text-xs text-[#c8c3b8] leading-relaxed">
+            <p className="text-[11px] sm:text-xs text-[#c8c3b8] leading-snug">
               {UI_STRINGS.HOW_TO_PLAY_3_BODY}{' '}
               <span className="text-[#fff0d4] font-medium">
                 {UI_STRINGS.DOORS_NEVER_LIE}
@@ -222,12 +225,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
       </div>
 
       {/* Flat inline control hint footer */}
-      <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-[#9e9a90] border-t border-[#e6e2d8]/10 pt-3">
-        <span>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#9e9a90] border-t border-[#ece7db]/10 pt-2">
+        <span className="truncate max-w-full">
           {UI_STRINGS.CONTROLS_BADGE} · Click in the train, then move the mouse (or use the
           arrow keys) · WASD Walk · F Flag · Esc or P Pause
         </span>
-        <span className="font-mono tabular-nums">
+        <span className="font-mono tabular-nums hidden sm:inline">
           Hoyt–Schermerhorn → Court Sq · 13 Stops
         </span>
       </div>

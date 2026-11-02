@@ -32,6 +32,13 @@ export default defineConfig(({ mode }) => {
                 if (id.includes('node_modules/three')) {
                   return 'three';
                 }
+                if (
+                  id.includes('node_modules/react') ||
+                  id.includes('node_modules/react-dom') ||
+                  id.includes('node_modules/scheduler')
+                ) {
+                  return 'react';
+                }
                 return undefined;
               },
             },

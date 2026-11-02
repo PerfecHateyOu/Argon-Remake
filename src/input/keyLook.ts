@@ -115,7 +115,7 @@ export class PlayerController {
     vx: 0,
     vz: 0,
     yaw: 0, // 0 faces -Z across the aisle from the +Z bench
-    pitch: -0.03,
+    pitch: 0,
     seated: true,
     angularSpeedRadS: 0,
     lastInputSource: 'none',
@@ -227,7 +227,7 @@ export class PlayerController {
       vx: 0,
       vz: 0,
       yaw: 0,
-      pitch: -0.03,
+      pitch: 0,
       seated: true,
       angularSpeedRadS: 0,
       lastInputSource: 'none',

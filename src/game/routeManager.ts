@@ -87,3 +87,15 @@ export function getChapterRollsign(
     subtitle: `${spec.stops[10]} to ${spec.terminus}`,
   };
 }
+
+export const routeManager = {
+  getRouteSpec,
+  getStopName,
+  isElevatedOpenAirStop,
+  getChapterRollsign,
+};
+
+if (typeof window !== 'undefined' && !import.meta.env?.PROD) {
+  (window as unknown as Record<string, unknown>).__RT = routeManager;
+}
+

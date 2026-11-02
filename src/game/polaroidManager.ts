@@ -149,3 +149,15 @@ export function buildPolaroidPhotoRecord(params: {
     capturedAtSec,
   };
 }
+
+export const polaroidManager = {
+  isAnomalyFramedInViewfinder,
+  formatCarLocationForPolaroid,
+  captureSquarePolaroidDataUrl,
+  buildPolaroidPhotoRecord,
+};
+
+if (typeof window !== 'undefined' && !import.meta.env?.PROD) {
+  (window as unknown as Record<string, unknown>).__P = polaroidManager;
+}
+
